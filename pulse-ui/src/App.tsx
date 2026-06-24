@@ -1,21 +1,27 @@
-import { useEffect, useState } from 'react'
+import { Routes, Route } from 'react-router-dom';
+import Layout from './components/Layout';
+import Dashboard from './pages/Dashboard';
+import Generate from './pages/Generate';
+import ContentList from './pages/ContentList';
+import ContentDetail from './pages/ContentDetail';
+import BulkJobs from './pages/BulkJobs';
+import Experiments from './pages/Experiments';
+import Settings from './pages/Settings';
 
 function App() {
-  const [status, setStatus] = useState<string>('checking...')
-
-  useEffect(() => {
-    fetch('/api/v1/health')
-      .then((res) => res.json())
-      .then((data) => setStatus(data.status))
-      .catch(() => setStatus('unreachable'))
-  }, [])
-
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
-      <h1 className="text-3xl font-bold mb-4">Pulse</h1>
-      <p className="text-slate-700">API status: <span className="font-semibold">{status}</span></p>
-    </div>
-  )
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={<Dashboard />} />
+        <Route path="/generate" element={<Generate />} />
+        <Route path="/content" element={<ContentList />} />
+        <Route path="/content/:id" element={<ContentDetail />} />
+        <Route path="/bulk-jobs" element={<BulkJobs />} />
+        <Route path="/experiments" element={<Experiments />} />
+        <Route path="/settings" element={<Settings />} />
+      </Route>
+    </Routes>
+  );
 }
 
-export default App
+export default App;

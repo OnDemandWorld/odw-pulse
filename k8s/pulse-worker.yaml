@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pulse-worker
+  namespace: pulse
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pulse-worker
+  template:
+    metadata:
+      labels:
+        app: pulse-worker
+    spec:
+      containers:
+        - name: pulse-worker
+          image: ondemandworld/pulse-worker:latest
+          envFrom:
+            - configMapRef:
+                name: pulse-config
+            - secretRef:
+                name: pulse-secrets
+          env:
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
