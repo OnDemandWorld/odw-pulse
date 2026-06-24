@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pulse.api import health
 from pulse.api.v1 import auth as auth_v1
+from pulse.api.v1 import generate as generate_v1
 from pulse.config import get_settings
 from pulse.core.logging import configure_logging
 from pulse.middleware.tenant import TenantMiddleware
@@ -34,6 +35,7 @@ def create_app() -> FastAPI:
     # Routes
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(auth_v1.router, prefix="/api/v1")
+    app.include_router(generate_v1.router, prefix="/api/v1")
 
     @app.get("/health/live", tags=["health"])
     async def liveness() -> dict[str, str]:
