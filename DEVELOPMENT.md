@@ -23,8 +23,8 @@
 | Content management API | ✅ Done | CRUD, versioning, export, 14 endpoints + tests |
 | Bulk job manager | ✅ Done | Service, API, Redis stream, CSV worker + tests |
 | Review workflow | ✅ Done | approve/reject/request-changes/annotations + tests |
-| Integrations | ⬜ Not started | Vault, S3/MinIO, Webhooks, Analytics connectors |
-| Experimentation engine | ⬜ Not started | A/B testing, variant assignment, statistics |
+| Integrations | ✅ Done | Vault, Storage, Webhook, Segment/GA4/Mixpanel connectors + tests |
+| Experimentation engine | ✅ Done | A/B tests, deterministic assignment, chi-squared, winner promotion + 13 tests |
 | Frontend UI | ⬜ Not started | React SPA, dashboard, experiment UI |
 | Deployment artifacts | ⬜ Not started | Docker Compose, Kubernetes manifests |
 

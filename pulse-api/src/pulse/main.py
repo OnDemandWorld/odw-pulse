@@ -7,6 +7,7 @@ from pulse.api import health
 from pulse.api.v1 import auth as auth_v1
 from pulse.api.v1 import bulk_jobs as bulk_jobs_v1
 from pulse.api.v1 import content as content_v1
+from pulse.api.v1 import experiments as experiments_v1
 from pulse.api.v1 import generate as generate_v1
 from pulse.api.v1 import integrations as integrations_v1
 from pulse.config import get_settings
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(content_v1.router, prefix="/api/v1")
     app.include_router(bulk_jobs_v1.router, prefix="/api/v1")
     app.include_router(integrations_v1.router, prefix="/api/v1")
+    app.include_router(experiments_v1.router, prefix="/api/v1")
 
     @app.get("/health/live", tags=["health"])
     async def liveness() -> dict[str, str]:
