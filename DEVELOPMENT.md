@@ -20,9 +20,9 @@
 | Cultural adaptation engine | ✅ Done | 10 market profiles, cultural dimensions engine |
 | Generation orchestrator | ✅ Done | 8-step pipeline, /api/v1/generate endpoint |
 | Quality scoring | ✅ Done | Heuristic quality engine, score + flags |
-| Content management API | ⬜ Not started | CRUD, versioning, export |
+| Content management API | ✅ Done | CRUD, versioning, export, 14 endpoints + tests |
 | Bulk job manager | ⬜ Not started | CSV/XLSX import, Redis Streams workers |
-| Review workflow | ⬜ Not started | Approval chains, annotations |
+| Review workflow | ✅ Done | approve/reject/request-changes/annotations + tests |
 | Integrations | ⬜ Not started | Vault, S3/MinIO, Webhooks, Analytics connectors |
 | Experimentation engine | ⬜ Not started | A/B testing, variant assignment, statistics |
 | Frontend UI | ⬜ Not started | React SPA, dashboard, experiment UI |

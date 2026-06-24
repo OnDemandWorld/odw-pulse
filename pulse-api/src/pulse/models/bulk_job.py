@@ -19,6 +19,7 @@ class BulkJobStatus(enum.StrEnum):
 
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"

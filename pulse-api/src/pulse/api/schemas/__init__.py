@@ -1,5 +1,11 @@
 """Pydantic v2 schemas for Pulse API."""
 
+from pulse.api.schemas.bulk_job import (
+    BulkJobConfig,
+    BulkJobCreateRequest,
+    BulkJobList,
+    BulkJobRead,
+)
 from pulse.api.schemas.content import (
     AnnotationCreate,
     ContentCreate,
@@ -19,6 +25,10 @@ from pulse.api.schemas.review import (
 __all__ = [
     "AnnotationCreate",
     "ApprovalChainRead",
+    "BulkJobConfig",
+    "BulkJobCreateRequest",
+    "BulkJobList",
+    "BulkJobRead",
     "ContentCreate",
     "ContentList",
     "ContentRead",
