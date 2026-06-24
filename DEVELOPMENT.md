@@ -13,8 +13,8 @@
 | Component | Status | Notes |
 |---|---|---|
 | Repository setup | ✅ Done | Git repo created, specs pushed to `OnDemandWorld/odw-pulse` |
-| Project scaffolding | 🔄 In Progress | Monorepo structure, pyproject.toml, FastAPI entrypoint |
-| Database schema & ORM | ⬜ Not started | 12 core + 6 experimentation entities |
+| Project scaffolding | ✅ Done | Monorepo structure, FastAPI entrypoint, tests pass, UI typechecks |
+| Database schema & ORM | ✅ Done | 18 entities, Alembic migration, RLS policies, partitioning hints |
 | Auth & tenant isolation | ⬜ Not started | JWT middleware, PostgreSQL RLS |
 | LLM abstraction layer | ⬜ Not started | Adapters: OpenAI, Anthropic, Mistral, Ollama, etc. |
 | Cultural adaptation engine | ⬜ Not started | Market profiles, dimension calculation |
