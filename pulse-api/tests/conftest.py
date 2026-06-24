@@ -10,14 +10,44 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+
+# ---------------------------------------------------------------------------
+# Register JSONB → JSON compiler for SQLite so all tables can be created.
+# ---------------------------------------------------------------------------
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.ext.compiler import compiles
 
 from pulse.api.v1.auth import _MOCK_EMAIL, _MOCK_WORKSPACE_ID
 from pulse.auth.security import create_access_token
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(element: Any, compiler: Any, **kw: Any) -> str:  # noqa: ARG001
+    """Render PostgreSQL JSONB columns as JSON on SQLite."""
+    return "JSON"
+
+
+@compiles(ARRAY, "sqlite")
+def _compile_array_sqlite(element: Any, compiler: Any, **kw: Any) -> str:  # noqa: ARG001
+    """Render PostgreSQL ARRAY columns as JSON on SQLite."""
+    return "JSON"
+
+
+@compiles(UUID, "sqlite")
+def _compile_uuid_sqlite(element: Any, compiler: Any, **kw: Any) -> str:  # noqa: ARG001
+    """Render PostgreSQL UUID columns as VARCHAR on SQLite."""
+    return "VARCHAR(36)"
+
+
+# Import content models so they're registered with Base.metadata.
+from pulse.models.content import ContentPiece, ContentVersion, ReviewAnnotation  # noqa: E402, F401
+from pulse.models.user import User  # noqa: E402, F401
+from pulse.models.workspace import Workspace  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # Event-loop fixture for pytest-asyncio
@@ -41,6 +71,17 @@ def event_loop() -> Any:
 async def async_engine() -> AsyncGenerator[Any, None]:
     """Return an async engine backed by in-memory SQLite."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+
+    # Register gen_random_uuid() function for SQLite
+    from sqlalchemy import event
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _register_sqlite_functions(dbapi_connection: Any, connection_record: Any) -> None:  # noqa: ARG001
+        """Register PostgreSQL-compatible functions for SQLite."""
+        dbapi_connection.create_function(
+            "gen_random_uuid", 0, lambda: str(uuid.uuid4())
+        )
+
     # Create all tables for in-memory testing.
     from pulse.db.base import Base
     async with engine.begin() as conn:
@@ -112,6 +153,7 @@ async def app_fixture(async_session: AsyncSession) -> Any:
 
     from pulse.api import health
     from pulse.api.v1 import auth as auth_v1
+    from pulse.api.v1 import content as content_v1
     from pulse.middleware.tenant import TenantMiddleware
 
     app = FastAPI()
@@ -125,13 +167,46 @@ async def app_fixture(async_session: AsyncSession) -> Any:
     app.add_middleware(TenantMiddleware)
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(auth_v1.router, prefix="/api/v1")
+    app.include_router(content_v1.router, prefix="/api/v1")
 
     # Override the DB dependency so endpoints use the in-memory session.
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield async_session
 
     app.dependency_overrides[auth_v1.get_db] = _override_get_db
+    app.dependency_overrides[content_v1.get_db] = _override_get_db
 
     yield app
 
     app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Workspace + User fixtures for content tests
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def test_workspace_and_user(async_session: AsyncSession) -> tuple[Any, Any]:
+    """Create a workspace and user matching the mock JWT token IDs."""
+    from pulse.api.v1.auth import _MOCK_USER_ID, _MOCK_WORKSPACE_ID
+    from pulse.models.user import UserRole
+
+    workspace = Workspace(
+        id=_MOCK_WORKSPACE_ID,
+        name="Test Workspace",
+        slug="test-workspace",
+    )
+    async_session.add(workspace)
+
+    user = User(
+        id=_MOCK_USER_ID,
+        workspace_id=_MOCK_WORKSPACE_ID,
+        email="test@example.com",
+        role=UserRole.ADMIN,
+        is_active=True,
+    )
+    async_session.add(user)
+    await async_session.commit()
+
+    return workspace, user

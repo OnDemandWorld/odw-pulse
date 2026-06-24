@@ -170,3 +170,47 @@ class ContentVersion(Base):
         return (
             f"<ContentVersion id={self.id} piece={self.content_piece_id} v={self.version_number}>"
         )
+
+
+class ReviewAnnotation(Base):
+    """Review comment or action on a content piece."""
+
+    __tablename__ = "review_annotations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    content_piece_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("content_pieces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSONB, nullable=True, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    content_piece: Mapped[object] = relationship(
+        "ContentPiece", backref="review_annotations", lazy="noload"
+    )
+
+    __table_args__ = (
+        {"comment": "Review annotations and actions on content pieces."},
+    )
+
+    def __repr__(self) -> str:
+        return f"<ReviewAnnotation id={self.id} action={self.action!r}>"

@@ -8,7 +8,7 @@ from pulse.models.api_key import APIKey
 from pulse.models.audit_log import AuditLog
 from pulse.models.brand_voice import BrandVoice
 from pulse.models.bulk_job import BulkJob
-from pulse.models.content import ContentPiece, ContentVersion
+from pulse.models.content import ContentPiece, ContentVersion, ReviewAnnotation
 from pulse.models.experiment import Experiment, ExperimentVariant
 from pulse.models.generation_cache import GenerationCache
 from pulse.models.glossary import Glossary, GlossaryTerm
@@ -40,6 +40,7 @@ __all__ = [
     "MarketProfile",
     "PerformanceEvent",
     "PromptVersion",
+    "ReviewAnnotation",
     "User",
     "UserRole",
     "WebhookConfig",

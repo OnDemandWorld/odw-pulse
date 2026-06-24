@@ -16,10 +16,10 @@
 | Project scaffolding | ✅ Done | Monorepo structure, FastAPI entrypoint, tests pass, UI typechecks |
 | Database schema & ORM | ✅ Done | 18 entities, Alembic migration, RLS policies, partitioning hints |
 | Auth & tenant isolation | ✅ Done | JWT tokens, password hashing, tenant middleware, auth endpoints + tests |
-| LLM abstraction layer | ⬜ Not started | Adapters: OpenAI, Anthropic, Mistral, Ollama, etc. |
-| Cultural adaptation engine | ⬜ Not started | Market profiles, dimension calculation |
-| Generation orchestrator | ⬜ Not started | End-to-end generation pipeline |
-| Quality scoring | ⬜ Not started | Confidence scores, grounding check |
+| LLM abstraction layer | ✅ Done | OpenAI/Anthropic/Ollama adapters, registry, fallback router, circuit breaker |
+| Cultural adaptation engine | ✅ Done | 10 market profiles, cultural dimensions engine |
+| Generation orchestrator | ✅ Done | 8-step pipeline, /api/v1/generate endpoint |
+| Quality scoring | ✅ Done | Heuristic quality engine, score + flags |
 | Content management API | ⬜ Not started | CRUD, versioning, export |
 | Bulk job manager | ⬜ Not started | CSV/XLSX import, Redis Streams workers |
 | Review workflow | ⬜ Not started | Approval chains, annotations |
