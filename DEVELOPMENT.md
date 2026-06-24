@@ -21,7 +21,7 @@
 | Generation orchestrator | ✅ Done | 8-step pipeline, /api/v1/generate endpoint |
 | Quality scoring | ✅ Done | Heuristic quality engine, score + flags |
 | Content management API | ✅ Done | CRUD, versioning, export, 14 endpoints + tests |
-| Bulk job manager | ⬜ Not started | CSV/XLSX import, Redis Streams workers |
+| Bulk job manager | ✅ Done | Service, API, Redis stream, CSV worker + tests |
 | Review workflow | ✅ Done | approve/reject/request-changes/annotations + tests |
 | Integrations | ⬜ Not started | Vault, S3/MinIO, Webhooks, Analytics connectors |
 | Experimentation engine | ⬜ Not started | A/B testing, variant assignment, statistics |

@@ -48,6 +48,7 @@ def _compile_uuid_sqlite(element: Any, compiler: Any, **kw: Any) -> str:  # noqa
 from pulse.models.bulk_job import BulkJob  # noqa: E402, F401
 from pulse.models.content import ContentPiece, ContentVersion, ReviewAnnotation  # noqa: E402, F401
 from pulse.models.user import User  # noqa: E402, F401
+from pulse.models.webhook_config import WebhookConfig  # noqa: E402, F401
 from pulse.models.workspace import Workspace  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
@@ -156,6 +157,7 @@ async def app_fixture(async_session: AsyncSession) -> Any:
     from pulse.api.v1 import auth as auth_v1
     from pulse.api.v1 import bulk_jobs as bulk_jobs_v1
     from pulse.api.v1 import content as content_v1
+    from pulse.api.v1 import integrations as integrations_v1
     from pulse.middleware.tenant import TenantMiddleware
 
     app = FastAPI()
@@ -171,6 +173,7 @@ async def app_fixture(async_session: AsyncSession) -> Any:
     app.include_router(auth_v1.router, prefix="/api/v1")
     app.include_router(content_v1.router, prefix="/api/v1")
     app.include_router(bulk_jobs_v1.router, prefix="/api/v1")
+    app.include_router(integrations_v1.router, prefix="/api/v1")
 
     # Override the DB dependency so endpoints use the in-memory session.
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -179,6 +182,7 @@ async def app_fixture(async_session: AsyncSession) -> Any:
     app.dependency_overrides[auth_v1.get_db] = _override_get_db
     app.dependency_overrides[content_v1.get_db] = _override_get_db
     app.dependency_overrides[bulk_jobs_v1.get_db] = _override_get_db
+    app.dependency_overrides[integrations_v1.get_db] = _override_get_db  # type: ignore[attr-defined]
 
     yield app
 
