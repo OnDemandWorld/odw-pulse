@@ -1,6 +1,6 @@
-# Pulse
+# ODW Pulse
 
-Pulse is a multilingual content generation platform that produces culturally-adapted marketing content across 50+ languages. Unlike simple translation tools, Pulse adapts tone, idiom, and cultural context for each target market.
+ODW Pulse is a multilingual content generation platform that produces culturally-adapted marketing content across 50+ languages. Unlike simple translation tools, Pulse adapts tone, idiom, and cultural context for each target market.
 
 ## Build Status
 
@@ -231,4 +231,5 @@ Content generation itself is increasingly commoditized — Pulse's value is in t
 
 ## License
 
-Proprietary — OnDemandWorld. All rights reserved.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
