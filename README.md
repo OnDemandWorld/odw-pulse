@@ -4,7 +4,7 @@ ODW Pulse is a multilingual content generation platform that produces culturally
 
 ## Status
 
-⚠️ **Early release.** ODW [Name] is an early, functional release — core features work, but it is not yet hardened for production. We are refining every module toward a first full public release in **Q3 2026**. Until then, it is best used as a foundation to build on with AI coding agents (see below).
+⚠️ **Early release.** ODW Pulse is an early, functional release — core features work, but it is not yet hardened for production. We are refining every module toward a first full public release in **Q3 2026**. Until then, it is best used as a foundation to build on with AI coding agents (see below).
 
 ## Build Status
 
@@ -234,7 +234,7 @@ Pulse is a **value-adding suite module** within the ODW.ai platform, not a stand
 Content generation itself is increasingly commoditized — Pulse's value is in the localization quality layer and the data flywheel from experimentation.
 
 ## Working with AI agents
-This repository is built to be extended with AI coding agents. Rather than a turnkey product, ODW [Name] is a working, well-structured codebase you can clone and adapt to your own needs with an agent like Claude Code. The repo includes agent context files (e.g. `CLAUDE.md`) and clear architecture docs so an agent can quickly understand the structure and help you customise, integrate, and extend it. To get started: clone the repo, open it with your coding agent, point it at this README and the docs, and describe what you want to build.
+This repository is built to be extended with AI coding agents. Rather than a turnkey product, ODW Pulse is a working, well-structured codebase you can clone and adapt to your own needs with an agent like Claude Code. The repo includes agent context files (e.g. `CLAUDE.md`) and clear architecture docs so an agent can quickly understand the structure and help you customise, integrate, and extend it. To get started: clone the repo, open it with your coding agent, point it at this README and the docs, and describe what you want to build.
 
 ## License
 
