@@ -66,7 +66,7 @@ make typecheck
 
 | Check | Command | Result |
 |---|---|---|
-| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 80 passed (~3.0s) |
+| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 89 passed (~17s) |
 | Backend lint | `cd pulse-api && ruff check src tests` | ✅ 0 issues (93 files) |
 | Backend typecheck | `cd pulse-api && mypy src` | ✅ 0 issues (93 files) |
 | Frontend typecheck | `cd pulse-ui && npx tsc --noEmit` | ✅ 0 errors |

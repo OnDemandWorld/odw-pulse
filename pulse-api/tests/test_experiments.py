@@ -10,10 +10,10 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.schemas.experiment import ExperimentVariantCreate
-from pulse.api.v1.auth import _MOCK_WORKSPACE_ID
 from pulse.auth.security import create_access_token
 from pulse.core.experiment.assignment import assign_variant
 from pulse.services.experiment_service import ExperimentService
+from tests.conftest import TEST_WORKSPACE_ID
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/experiments — authentication
@@ -266,7 +266,7 @@ async def test_experiment_results_recommends_winner(
 
     exp = await svc.create_experiment(
         db=async_session,
-        workspace_id=_MOCK_WORKSPACE_ID,
+        workspace_id=TEST_WORKSPACE_ID,
         data=ExperimentCreate(
             name="Winner Test",
             variants=[
@@ -538,7 +538,7 @@ async def test_promote_winner(
 
     exp = await svc.create_experiment(
         db=async_session,
-        workspace_id=_MOCK_WORKSPACE_ID,
+        workspace_id=TEST_WORKSPACE_ID,
         data=ExperimentCreate(
             name="Promote Test",
             variants=[
@@ -550,7 +550,7 @@ async def test_promote_winner(
     exp_id = exp.id
 
     # Start experiment
-    await svc.start_experiment(async_session, exp_id, _MOCK_WORKSPACE_ID)
+    await svc.start_experiment(async_session, exp_id, TEST_WORKSPACE_ID)
 
     # Ingest some events so we have a winner
     control_id = exp.variants[0].id

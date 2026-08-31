@@ -6,7 +6,7 @@ This file provides guidance to AI coding agents (Claude Code, Copilot, etc.) whe
 
 **This is a fully implemented codebase.** All 10 checkpoints from the planning phase are complete, a full review/refactor pass landed on 2026-08-31, and Phase 0 + Phase 1 of the roadmap (CI, SSRF guard, durable bulk-job pipeline) landed on 2026-09-01 — see `PLAN.md`. The backend API, frontend SPA, worker, scheduler, and deployment artifacts are all implemented with passing tests and clean lint/type checks.
 
-- **Backend:** 93 Python source files, 80 tests passing
+- **Backend:** 94 Python source files, 89 tests passing
 - **Frontend:** 18 TypeScript/React files, clean typecheck, lint, and build
 - **Deployment:** Docker Compose (7 services) + Kubernetes manifests (10 YAML files)
 - **CI:** GitHub Actions runs backend tests/lint/types, frontend checks, manifest validation, and image builds on every push/PR
@@ -32,7 +32,7 @@ odw-pulse/
 │   │   ├── quality/      # Heuristic quality scoring engine
 │   │   ├── services/     # Business logic layer
 │   │   └── worker/       # Redis Streams pipeline (consumer helpers, dispatch, maintenance)
-│   └── tests/            # 80 tests across 11 files
+│   └── tests/            # 89 tests across 11 files
 ├── pulse-ui/             # React 18 + TypeScript + Vite SPA
 │   └── src/
 │       ├── api/          # Axios HTTP client
@@ -116,7 +116,7 @@ make build                      # Build all Docker images
 # Backend (from pulse-api/)
 source .venv/bin/activate
 uvicorn pulse.main:app --reload --port 8000   # Run API
-pytest tests -v                                # 80 tests, ~3.0s
+pytest tests -v                                # 89 tests, ~17s
 ruff check src tests                           # Lint (90 files)
 mypy src                                       # Type check strict (90 files)
 

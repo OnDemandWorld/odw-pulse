@@ -181,7 +181,7 @@ async def test_reap_stale_jobs_fails_running_and_requeues_pending(
 ) -> None:
     """Old RUNNING jobs are failed; old PENDING jobs are re-enqueued."""
     from pulse.api.schemas.bulk_job import BulkJobConfig
-    from pulse.api.v1.auth import _MOCK_WORKSPACE_ID
+    from tests.conftest import TEST_WORKSPACE_ID
 
     requeued: list[str] = []
 
@@ -196,12 +196,12 @@ async def test_reap_stale_jobs_fails_running_and_requeues_pending(
 
     async with reap_factory() as db:
         running = await svc.create_job(
-            db=db, workspace_id=_MOCK_WORKSPACE_ID, config=BulkJobConfig(), total=5
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=5
         )
         running.status = BulkJobStatus.RUNNING
         running.updated_at = old
         pending = await svc.create_job(
-            db=db, workspace_id=_MOCK_WORKSPACE_ID, config=BulkJobConfig(), total=5
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=5
         )
         pending.updated_at = old
         await db.commit()
@@ -227,7 +227,7 @@ async def test_reap_ignores_fresh_jobs(
 ) -> None:
     """Jobs inside the staleness window are left alone."""
     from pulse.api.schemas.bulk_job import BulkJobConfig
-    from pulse.api.v1.auth import _MOCK_WORKSPACE_ID
+    from tests.conftest import TEST_WORKSPACE_ID
 
     async def _enqueue_should_not_run(job_id: str, redis_url: str | None = None) -> bool:
         raise AssertionError("fresh jobs must not be requeued")
@@ -237,7 +237,7 @@ async def test_reap_ignores_fresh_jobs(
     svc = BulkJobService()
     async with reap_factory() as db:
         await svc.create_job(
-            db=db, workspace_id=_MOCK_WORKSPACE_ID, config=BulkJobConfig(), total=1
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=1
         )
         await db.commit()
 

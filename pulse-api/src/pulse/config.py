@@ -26,6 +26,11 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://pulse:pulse@localhost:5432/pulse"
+    # Privileged connection used *before* a request is authenticated
+    # (login/registration lookups).  With RLS enforced, the scoped app role
+    # cannot read users without a workspace context, so auth needs a role
+    # that can.  Defaults to database_url when unset.
+    database_admin_url: str | None = None
     database_pool_size: int = 10
     database_max_overflow: int = 20
 

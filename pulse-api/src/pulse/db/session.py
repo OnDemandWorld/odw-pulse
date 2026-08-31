@@ -40,6 +40,12 @@ from pulse.config import Settings, get_settings
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
+# Privileged engine used for pre-authentication lookups (login,
+# registration).  Separate because the RLS-scoped application role cannot
+# read users without a workspace context.
+_admin_engine: AsyncEngine | None = None
+_admin_session_factory: async_sessionmaker[AsyncSession] | None = None
+
 
 # ---------------------------------------------------------------------------
 # RLS context hook — re-applies the workspace setting on every transaction.
@@ -103,10 +109,44 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def get_admin_session_factory(
+    settings: Settings | None = None,
+) -> async_sessionmaker[AsyncSession]:
+    """Return a cached session factory bound to the privileged admin engine.
+
+    Falls back to the regular database URL when ``database_admin_url`` is
+    unset (single-role development setups).
+    """
+    global _admin_engine, _admin_session_factory  # noqa: PLW0603
+    if _admin_session_factory is None:
+        s = settings or get_settings()
+        admin_url = s.database_admin_url or s.database_url
+        _admin_engine = create_async_engine(
+            admin_url,
+            pool_size=s.database_pool_size,
+            max_overflow=s.database_max_overflow,
+            echo=s.pulse_debug,
+        )
+        _admin_session_factory = async_sessionmaker(_admin_engine, expire_on_commit=False)
+    return _admin_session_factory
+
+
+async def get_admin_session() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency — privileged session for pre-auth endpoints."""
+    factory = get_admin_session_factory()
+    async with factory() as session:
+        yield session
+
+
 async def dispose_engine() -> None:
-    """Dispose the global engine (call on application shutdown)."""
+    """Dispose the global engines (call on application shutdown)."""
     global _engine, _session_factory  # noqa: PLW0603
+    global _admin_engine, _admin_session_factory  # noqa: PLW0603
     if _engine is not None:
         await _engine.dispose()
         _engine = None
         _session_factory = None
+    if _admin_engine is not None:
+        await _admin_engine.dispose()
+        _admin_engine = None
+        _admin_session_factory = None

@@ -18,7 +18,6 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -84,8 +83,8 @@ async def get_current_user(
     """Validate the JWT bearer token and return the user identity.
 
     The user record is looked up in the database to ensure it still exists
-    and is active.  When no matching row is found (e.g. during integration
-    tests with a mock user store) the token payload is returned as-is.
+    and is active.  Only when the ``users`` table itself is missing (fresh
+    unmigrated installation) do the token claims pass unvalidated.
     """
     if token is None:
         raise HTTPException(
@@ -110,21 +109,29 @@ async def get_current_user(
     # Publish the workspace scope for the DB layer (RLS SET LOCAL hook).
     WorkspaceContext.set(workspace_id)
 
-    # Best-effort DB lookup — fall back to token payload when the row is
-    # absent (supports mock-user login during early development) or when
-    # the table does not exist yet (tests, fresh installations).  Any other
-    # database failure is surfaced, so an unreachable database cannot be
-    # used to bypass the active-user check.
+    # Verify the user still exists and is active.  Any database failure
+    # other than a missing users table is surfaced, so an unreachable
+    # database cannot be used to bypass the check.
     try:
+        # Use ORM-style parameter binding that works on both PostgreSQL
+        # (native UUID) and SQLite (hex string) via the UUID type compiler.
+        from sqlalchemy import select
+
+        from pulse.models.user import User
+
         result = await session.execute(
-            text("SELECT id, is_active FROM users WHERE id = :id"),
-            {"id": str(user_id)},
+            select(User.id, User.is_active).where(User.id == user_id)
         )
         row = result.first()
-        if row is not None:
-            is_active: bool = bool(row[1])
-            if not is_active:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User no longer exists",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        is_active: bool = bool(row[1])
+        if not is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
     except HTTPException:
         raise
     except (ProgrammingError, OperationalError) as exc:

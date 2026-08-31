@@ -24,8 +24,15 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.ext.compiler import compiles
 
-from pulse.api.v1.auth import _MOCK_EMAIL, _MOCK_WORKSPACE_ID
-from pulse.auth.security import create_access_token
+from pulse.auth.security import create_access_token, hash_password
+
+# ---------------------------------------------------------------------------
+# Shared test identity — fixtures create a real workspace + user with these.
+# ---------------------------------------------------------------------------
+TEST_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+TEST_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+TEST_EMAIL = "test@example.com"
+TEST_PASSWORD = "testpassword"
 
 
 @compiles(JSONB, "sqlite")
@@ -143,13 +150,20 @@ async def client(app_fixture: Any) -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest_asyncio.fixture
-async def authorized_client(app_fixture: Any) -> AsyncGenerator[AsyncClient, None]:
-    """Return an ``AsyncClient`` with a valid JWT in the Authorization header."""
+async def authorized_client(
+    app_fixture: Any,
+    test_workspace_and_user: tuple[Any, Any],
+) -> AsyncGenerator[AsyncClient, None]:
+    """Return an ``AsyncClient`` with a valid JWT in the Authorization header.
+
+    Depends on ``test_workspace_and_user`` so the user row exists in the DB
+    for the tightened ``get_current_user`` lookup.
+    """
     token = create_access_token(
-        user_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-        email=_MOCK_EMAIL,
-        workspace_id=_MOCK_WORKSPACE_ID,
-        role="admin",
+        user_id=TEST_USER_ID,
+        email=TEST_EMAIL,
+        workspace_id=TEST_WORKSPACE_ID,
+        role="owner",
     )
     transport = ASGITransport(app=app_fixture)
     async with AsyncClient(
@@ -198,10 +212,21 @@ async def app_fixture(async_session: AsyncSession) -> Any:
     app.include_router(experiments_v1.router, prefix="/api/v1")
 
     # Override the DB dependency so endpoints use the in-memory session.
+    # We override the *source* functions in pulse.db.session so all imports
+    # (auth.dependencies, each router module, etc.) resolve to the same
+    # override.
     async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield async_session
 
-    app.dependency_overrides[auth_v1.get_db] = _override_get_db
+    from pulse.api import deps as api_deps
+    from pulse.auth import dependencies as auth_deps
+    from pulse.db import session as db_session
+
+    # Override all possible references to get_session/get_db
+    app.dependency_overrides[db_session.get_session] = _override_get_db
+    app.dependency_overrides[db_session.get_admin_session] = _override_get_db
+    app.dependency_overrides[auth_deps.get_db] = _override_get_db
+    app.dependency_overrides[api_deps.get_db] = _override_get_db
     app.dependency_overrides[content_v1.get_db] = _override_get_db
     app.dependency_overrides[bulk_jobs_v1.get_db] = _override_get_db
     app.dependency_overrides[integrations_v1.get_db] = _override_get_db  # type: ignore[attr-defined]
@@ -219,23 +244,23 @@ async def app_fixture(async_session: AsyncSession) -> Any:
 
 @pytest_asyncio.fixture
 async def test_workspace_and_user(async_session: AsyncSession) -> tuple[Any, Any]:
-    """Create a workspace and user matching the mock JWT token IDs."""
-    from pulse.api.v1.auth import _MOCK_USER_ID, _MOCK_WORKSPACE_ID
+    """Create a workspace and user matching the test JWT token IDs."""
     from pulse.models.user import UserRole
 
     workspace = Workspace(
-        id=_MOCK_WORKSPACE_ID,
+        id=TEST_WORKSPACE_ID,
         name="Test Workspace",
         slug="test-workspace",
     )
     async_session.add(workspace)
 
     user = User(
-        id=_MOCK_USER_ID,
-        workspace_id=_MOCK_WORKSPACE_ID,
-        email="test@example.com",
+        id=TEST_USER_ID,
+        workspace_id=TEST_WORKSPACE_ID,
+        email=TEST_EMAIL,
         role=UserRole.ADMIN,
         is_active=True,
+        password_hash=hash_password(TEST_PASSWORD),
     )
     async_session.add(user)
     await async_session.commit()

@@ -12,10 +12,10 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.schemas.bulk_job import BulkJobConfig
-from pulse.api.v1.auth import _MOCK_WORKSPACE_ID
 from pulse.auth.security import create_access_token
 from pulse.models.bulk_job import BulkJobStatus
 from pulse.services.bulk_job_service import BulkJobService
+from tests.conftest import TEST_WORKSPACE_ID
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/bulk-jobs — authentication
@@ -90,7 +90,7 @@ async def test_update_bulk_job_progress(
     # Create job directly via service
     job = await svc.create_job(
         db=async_session,
-        workspace_id=_MOCK_WORKSPACE_ID,
+        workspace_id=TEST_WORKSPACE_ID,
         config=config,
         input_file="/tmp/test.csv",
         total=100,
@@ -99,15 +99,15 @@ async def test_update_bulk_job_progress(
     assert job.progress == 0
 
     # Increment progress
-    job = await svc.increment_progress(async_session, job_id, _MOCK_WORKSPACE_ID, count=10)
+    job = await svc.increment_progress(async_session, job_id, TEST_WORKSPACE_ID, count=10)
     assert job.progress == 10
 
-    job = await svc.increment_progress(async_session, job_id, _MOCK_WORKSPACE_ID, count=5)
+    job = await svc.increment_progress(async_session, job_id, TEST_WORKSPACE_ID, count=5)
     assert job.progress == 15
 
     # Update status
     job = await svc.update_status(
-        async_session, job_id, _MOCK_WORKSPACE_ID, BulkJobStatus.RUNNING, progress=20
+        async_session, job_id, TEST_WORKSPACE_ID, BulkJobStatus.RUNNING, progress=20
     )
     assert job.status == BulkJobStatus.RUNNING
     assert job.progress == 20
@@ -248,13 +248,13 @@ async def test_pause_and_resume_bulk_job(
     # Create job and set to running
     job = await svc.create_job(
         db=async_session,
-        workspace_id=_MOCK_WORKSPACE_ID,
+        workspace_id=TEST_WORKSPACE_ID,
         config=config,
         total=50,
     )
     job_id = job.id
     await svc.update_status(
-        async_session, job_id, _MOCK_WORKSPACE_ID, BulkJobStatus.RUNNING
+        async_session, job_id, TEST_WORKSPACE_ID, BulkJobStatus.RUNNING
     )
 
     # Pause via API
@@ -294,7 +294,7 @@ async def test_download_bulk_job_results(
         # Create job and mark as succeeded with output
         job = await svc.create_job(
             db=async_session,
-            workspace_id=_MOCK_WORKSPACE_ID,
+            workspace_id=TEST_WORKSPACE_ID,
             config=config,
             total=1,
         )
