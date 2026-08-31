@@ -1,33 +1,27 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import apiClient from '@/api/client';
-import { ContentPiece } from '@/types';
+import { ContentPiece, ContentStatus, ListResponse } from '@/types';
 
 function fetchContent() {
-  return apiClient.get<ContentPiece[]>('/content').then((res) => res.data);
+  return apiClient
+    .get<ListResponse<ContentPiece>>('/content')
+    .then((res) => res.data.items);
 }
+
+const STATUS_COLORS: Record<ContentStatus, string> = {
+  draft: 'bg-gray-100 text-gray-700',
+  review: 'bg-purple-100 text-purple-700',
+  approved: 'bg-green-100 text-green-700',
+  rejected: 'bg-red-100 text-red-700',
+  archived: 'bg-yellow-100 text-yellow-700',
+};
 
 export default function ContentList() {
   const { data: content, isLoading, error } = useQuery({
     queryKey: ['content'],
     queryFn: fetchContent,
   });
-
-  const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      draft: 'bg-gray-100 text-gray-700',
-      approved: 'bg-blue-100 text-blue-700',
-      published: 'bg-green-100 text-green-700',
-      archived: 'bg-yellow-100 text-yellow-700',
-    };
-    return (
-      <span
-        className={`px-2 py-1 text-xs font-medium rounded-full ${colors[status] || 'bg-gray-100 text-gray-700'}`}
-      >
-        {status}
-      </span>
-    );
-  };
 
   return (
     <div className="max-w-6xl">
@@ -51,7 +45,7 @@ export default function ContentList() {
 
         {error && (
           <div className="p-8 text-center text-red-600">
-            Failed to load content. Make sure the API is running.
+            Failed to load content. Make sure the API is running and you are signed in.
           </div>
         )}
 
@@ -93,9 +87,20 @@ export default function ContentList() {
                     >
                       {item.title}
                     </Link>
+                    <p className="text-xs text-gray-400 mt-0.5">{item.slug}</p>
                   </td>
-                  <td className="px-6 py-4">{statusBadge(item.status)}</td>
-                  <td className="px-6 py-4 text-sm text-gray-700">{item.target_market}</td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`px-2 py-1 text-xs font-medium rounded-full ${
+                        STATUS_COLORS[item.status] ?? 'bg-gray-100 text-gray-700'
+                      }`}
+                    >
+                      {item.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-700">
+                    {item.market_code ?? '—'}
+                  </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {new Date(item.updated_at).toLocaleDateString()}
                   </td>

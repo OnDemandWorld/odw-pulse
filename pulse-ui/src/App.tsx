@@ -1,5 +1,8 @@
 import { Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
+import RequireAuth from './components/RequireAuth';
+import Login from './pages/Login';
+import NotFound from './pages/NotFound';
 import Dashboard from './pages/Dashboard';
 import Generate from './pages/Generate';
 import ContentList from './pages/ContentList';
@@ -11,15 +14,19 @@ import Settings from './pages/Settings';
 function App() {
   return (
     <Routes>
-      <Route element={<Layout />}>
-        <Route index element={<Dashboard />} />
-        <Route path="/generate" element={<Generate />} />
-        <Route path="/content" element={<ContentList />} />
-        <Route path="/content/:id" element={<ContentDetail />} />
-        <Route path="/bulk-jobs" element={<BulkJobs />} />
-        <Route path="/experiments" element={<Experiments />} />
-        <Route path="/settings" element={<Settings />} />
+      <Route path="/login" element={<Login />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<Layout />}>
+          <Route index element={<Dashboard />} />
+          <Route path="/generate" element={<Generate />} />
+          <Route path="/content" element={<ContentList />} />
+          <Route path="/content/:id" element={<ContentDetail />} />
+          <Route path="/bulk-jobs" element={<BulkJobs />} />
+          <Route path="/experiments" element={<Experiments />} />
+          <Route path="/settings" element={<Settings />} />
+        </Route>
       </Route>
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }

@@ -16,7 +16,12 @@ function fetchVersions(id: string) {
 export default function ContentDetail() {
   const { id } = useParams<{ id: string }>();
 
-  const { data: content, isLoading: contentLoading } = useQuery({
+  const {
+    data: content,
+    isLoading: contentLoading,
+    isError: contentError,
+    error: contentErr,
+  } = useQuery({
     queryKey: ['content', id],
     queryFn: () => fetchContent(id!),
     enabled: !!id,
@@ -32,6 +37,15 @@ export default function ContentDetail() {
     return <div className="text-gray-500">Loading...</div>;
   }
 
+  if (contentError) {
+    const status = (contentErr as { response?: { status?: number } })?.response?.status;
+    return (
+      <div className="text-gray-500">
+        {status === 404 ? 'Content not found.' : 'Failed to load content. Is the API running?'}
+      </div>
+    );
+  }
+
   if (!content) {
     return <div className="text-gray-500">Content not found.</div>;
   }
@@ -44,20 +58,18 @@ export default function ContentDetail() {
 
       <h1 className="text-3xl font-bold text-gray-900 mb-2">{content.title}</h1>
 
-      <div className="flex gap-4 mb-8 text-sm text-gray-500">
-        <span>Type: {content.content_type.replace(/_/g, ' ')}</span>
-        <span>•</span>
-        <span>Market: {content.target_market}</span>
-        <span>•</span>
-        <span>Tone: {content.tone}</span>
-        <span>•</span>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mb-8 text-sm text-gray-500">
         <span>Status: {content.status}</span>
+        <span>•</span>
+        <span>Market: {content.market_code ?? '—'}</span>
+        <span>•</span>
+        <span>Slug: {content.slug}</span>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Content</h2>
         <div className="whitespace-pre-wrap text-gray-800 text-sm leading-relaxed">
-          {content.content}
+          {content.body ?? <span className="text-gray-400">No body text.</span>}
         </div>
       </div>
 
@@ -68,20 +80,18 @@ export default function ContentDetail() {
           </h2>
           <div className="space-y-4">
             {versions.map((version) => (
-              <div
-                key={version.id}
-                className="border border-gray-200 rounded-lg p-4"
-              >
+              <div key={version.id} className="border border-gray-200 rounded-lg p-4">
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-medium text-gray-900">
-                    Version {version.version}
+                    Version {version.version_number}
                   </span>
                   <span className="text-xs text-gray-500">
                     {new Date(version.created_at).toLocaleString()}
+                    {version.change_note ? ` — ${version.change_note}` : ''}
                   </span>
                 </div>
                 <div className="whitespace-pre-wrap text-gray-700 text-sm">
-                  {version.content}
+                  {version.body ?? <span className="text-gray-400">Empty version.</span>}
                 </div>
               </div>
             ))}

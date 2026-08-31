@@ -1,97 +1,198 @@
+// TypeScript types mirroring the pulse-api Pydantic schemas.
+// Keep these in sync with pulse-api/src/pulse/api/schemas/ and
+// pulse-api/src/pulse/generation/models.py.
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  role: string;
+  workspace_id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Content (schemas/content.py)
+// ---------------------------------------------------------------------------
+
+export type ContentStatus = 'draft' | 'review' | 'approved' | 'rejected' | 'archived';
+
 export interface ContentPiece {
   id: string;
+  workspace_id: string;
+  slug: string;
   title: string;
-  content_type: string;
-  target_market: string;
-  tone: string;
-  model: string;
-  status: 'draft' | 'approved' | 'published' | 'archived';
-  content: string;
-  brief: string;
+  body: string | null;
+  metadata: Record<string, unknown> | null;
+  status: ContentStatus;
+  market_code: string | null;
   created_at: string;
   updated_at: string;
-  versions?: ContentVersion[];
 }
 
 export interface ContentVersion {
   id: string;
-  content_id: string;
-  version: number;
-  content: string;
+  content_piece_id: string;
+  version_number: number;
+  body: string | null;
+  metadata: Record<string, unknown> | null;
+  status: ContentStatus;
+  change_note: string | null;
   created_at: string;
+  created_by: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Generation (generation/models.py)
+// ---------------------------------------------------------------------------
+
+export interface GenerateRequest {
+  content_type: string;
+  target_market: string;
+  prompt: string;
+  brand_voice_id?: string | null;
+  vault_sources?: string[];
+  glossary?: Record<string, unknown>[];
+  llm_params?: Record<string, unknown>;
+  cultural_overrides?: Record<string, unknown>;
+}
+
+export interface GenerateResponse {
+  content: string;
+  quality_score: number;
+  quality_flags: string[];
+  cultural_directive: Record<string, unknown>;
+  llm_model: string;
+  llm_usage: Record<string, number>;
+  latency_ms: number;
+}
+
+// ---------------------------------------------------------------------------
+// Bulk jobs (schemas/bulk_job.py)
+// ---------------------------------------------------------------------------
+
+export type BulkJobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface BulkJob {
+  id: string;
+  workspace_id: string;
+  status: BulkJobStatus;
+  total: number;
+  progress: number;
+  input_file: string | null;
+  output_file: string | null;
+  errors: Record<string, string> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Experiments (schemas/experiment.py)
+// ---------------------------------------------------------------------------
+
+export type ExperimentStatus = 'draft' | 'running' | 'paused' | 'completed' | 'archived';
+
+export interface ExperimentVariant {
+  id: string;
+  experiment_id: string;
+  name: string;
+  weight: number;
+  configuration: Record<string, unknown> | null;
+  position: number;
 }
 
 export interface Experiment {
   id: string;
+  workspace_id: string;
   name: string;
-  description: string;
-  status: 'draft' | 'running' | 'completed' | 'paused';
-  variants: Variant[];
+  description: string | null;
+  status: ExperimentStatus;
+  hypothesis: string | null;
+  configuration: Record<string, unknown> | null;
+  started_at: string | null;
+  ended_at: string | null;
   created_at: string;
   updated_at: string;
-  results?: ExperimentResults;
+  created_by: string | null;
+  variants: ExperimentVariant[];
+  tracking_urls: Record<string, string> | null;
 }
 
-export interface Variant {
-  id: string;
-  experiment_id: string;
+export interface ExperimentVariantCreate {
   name: string;
-  content: string;
-  traffic_percentage: number;
+  weight: number;
+  configuration: Record<string, unknown> | null;
+  is_control: boolean;
 }
 
-export interface ExperimentResults {
-  experiment_id: string;
-  variant_results: VariantResult[];
-  winner?: string;
+export interface ExperimentCreate {
+  name: string;
+  description?: string | null;
+  hypothesis?: string | null;
+  configuration?: Record<string, unknown> | null;
+  variants: ExperimentVariantCreate[];
 }
 
 export interface VariantResult {
   variant_id: string;
   variant_name: string;
+  is_control: boolean;
+  visitor_count: number;
   impressions: number;
+  clicks: number;
   conversions: number;
   conversion_rate: number;
 }
 
-export interface BulkJob {
+export interface StatisticalAnalysis {
+  control_variant: string;
+  treatment_variant: string;
+  p_value: number;
+  confidence_level: number;
+  effect_size: number;
+  is_significant: boolean;
+}
+
+export interface WinnerRecommendation {
+  recommended_variant: string | null;
+  confidence: number;
+  reason: string;
+}
+
+export interface ExperimentResults {
+  experiment_id: string;
+  experiment_name: string;
+  variant_results: VariantResult[];
+  statistical_analyses: StatisticalAnalysis[];
+  winner_recommendation: WinnerRecommendation;
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks (api/v1/integrations.py)
+// ---------------------------------------------------------------------------
+
+export interface WebhookConfigRead {
   id: string;
-  name: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  total_items: number;
-  processed_items: number;
-  failed_items: number;
+  workspace_id: string;
+  url: string;
+  events: string[];
+  is_active: boolean;
   created_at: string;
-  updated_at: string;
-  csv_file?: string;
 }
 
-export interface GenerateRequest {
-  content_type: string;
-  target_market: string;
-  brief: string;
-  tone: string;
-  model: string;
-}
+// ---------------------------------------------------------------------------
+// Shared
+// ---------------------------------------------------------------------------
 
-export interface GenerateResponse {
-  content: string;
-  metadata: {
-    model: string;
-    tokens_used: number;
-    duration_ms: number;
-  };
-}
-
-export interface ApiResponse<T> {
-  data: T;
-  message?: string;
-}
-
-export interface PaginatedResponse<T> {
-  data: T[];
+/** List endpoints return { items, total } wrappers, never bare arrays. */
+export interface ListResponse<T> {
+  items: T[];
   total: number;
-  page: number;
-  limit: number;
-  has_more: boolean;
 }

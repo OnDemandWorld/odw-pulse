@@ -9,7 +9,10 @@ interface NavLinkProps {
 
 export default function NavLink({ to, children, icon }: NavLinkProps) {
   const location = useLocation();
-  const isActive = location.pathname === to;
+  // Prefix matching keeps parent items highlighted on nested routes
+  // (e.g. /content/:id keeps "Content" active); "/" matches exactly.
+  const isActive =
+    to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
 
   return (
     <Link
