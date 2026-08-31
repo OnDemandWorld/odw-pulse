@@ -2,10 +2,11 @@
 
 **Goal:** Build the full solution defined in `tsd.md` and `tbk.md`.
 
-**Current Status:** All 10 checkpoints are complete. The backend, frontend, and deployment artifacts are implemented with passing tests and clean lint/type checks.
+**Current Status:** All 10 checkpoints are complete. The backend, frontend, and deployment artifacts are implemented with passing tests and clean lint/type checks. A full code review & refactor pass was completed on 2026-08-31 (see `PLAN.md` for the complete report and next steps).
 
 **Started:** 2026-06-24
 **Completed:** 2026-06-24
+**Last review pass:** 2026-08-31
 
 ---
 
@@ -26,8 +27,8 @@
 | Bulk job manager | ✅ Done | Service, API, Redis stream, CSV worker + tests |
 | Integrations | ✅ Done | Vault (mock), Storage (S3/MinIO), Webhooks (HMAC), Segment/GA4/Mixpanel connectors |
 | Experimentation engine | ✅ Done | A/B tests, deterministic assignment (SHA256), chi-squared, winner promotion + 13 tests |
-| Frontend UI | ✅ Done | React SPA with 7 pages (Dashboard, Generate, Content, BulkJobs, Experiments, Settings) |
-| Deployment artifacts | ✅ Done | Docker Compose (7 services), Kubernetes manifests (9 YAML files), Makefile |
+| Frontend UI | ✅ Done | React SPA with 9 pages (Dashboard, Generate, Content, ContentDetail, BulkJobs, Experiments, Settings, Login, NotFound), real auth flow, API contract aligned with backend |
+| Deployment artifacts | ✅ Done | Docker Compose (7 services), Kubernetes manifests (10 YAML files), Makefile |
 
 ---
 
@@ -65,12 +66,12 @@ make typecheck
 
 | Check | Command | Result |
 |---|---|---|
-| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 57 passed (2.61s) |
+| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 59 passed (~2.8s) |
 | Backend lint | `cd pulse-api && ruff check src tests` | ✅ 0 issues (90 files) |
 | Backend typecheck | `cd pulse-api && mypy src` | ✅ 0 issues (90 files) |
 | Frontend typecheck | `cd pulse-ui && npx tsc --noEmit` | ✅ 0 errors |
-| Frontend build | `cd pulse-ui && npm run build` | ✅ 143 modules, 905ms |
-| Frontend lint | `cd pulse-ui && npm run lint` | ✅ 0 warnings |
+| Frontend build | `cd pulse-ui && npm run build` | ✅ 147 modules, <1s |
+| Frontend lint | `cd pulse-ui && npm run lint` | ✅ 0 warnings (ESLint config added 2026-08-31) |
 
 ---
 
@@ -106,40 +107,44 @@ make typecheck
 
 ## Known Gaps & Issues
 
-These are known issues that should be addressed before production use:
+These are known issues that should be addressed before production use.
+(✅ = resolved in the 2026-08-31 review pass; see `PLAN.md`.)
 
 ### Critical (Must fix before production)
 1. **No CI/CD pipeline** — No `.github/workflows/` directory. All checks run manually.
-2. **k8s ConfigMap missing** — Manifests reference `pulse-config` ConfigMap but `k8s/configmap.yaml` doesn't exist. Deployments will fail.
+2. ~~**k8s ConfigMap missing**~~ ✅ Added `k8s/configmap.yaml`; Secret keys renamed to match the env vars the app reads.
 3. **Analytics connectors are stubs** — GA4/Mixpanel/Segment connectors log calls but don't actually send data to external services.
 4. **Vault connector is a mock** — Returns canned responses, doesn't call real Vault API.
 5. **No rate limiting** — No per-tenant or per-IP rate limiting on API endpoints.
 6. **Secrets management** — k8s secrets are in YAML files; should use sealed-secrets or external secret manager.
+7. **RLS not yet binding** — Real per-workspace RLS policies and the `SET LOCAL pulse.workspace_id` hook are implemented, but the app connects as the table *owner*, so PostgreSQL does not enforce the policies until a dedicated non-owner DB role is introduced (or `FORCE ROW LEVEL SECURITY` is enabled). Service-layer workspace filtering remains the actual isolation boundary.
+8. **Auth is a mock** — `/auth/login` validates against a hardcoded test user; there is no user management, registration, or real workspace membership (impersonation checks only that the target workspace exists).
 
 ### High Priority
-7. **Worker/scheduler launch inconsistency** — Makefile launches worker/scheduler from `pulse-api/` venv, but they have their own `pyproject.toml` and Dockerfiles as separate packages.
-8. **No E2E tests** — Only unit/integration tests via pytest. No Playwright/Cypress for frontend.
-9. **Simplified quality scoring** — Current engine is heuristic (readability, structure). No LLM-based evaluation.
-10. **No pagination on bulk endpoints** — Bulk job download returns full CSV without streaming. Large jobs will OOM.
-11. **No request validation hardening** — Max upload size, request timeout, CORS whitelist.
-12. **No database backups** — No backup strategy documented or automated.
+9. ~~**Worker/scheduler launch inconsistency**~~ ✅ `make install` installs all three packages into one venv; `make worker` / `make scheduler` work. The standalone worker still needs a real Redis Streams consumer (see PLAN.md).
+10. **No E2E tests** — Only unit/integration tests via pytest. No Playwright/Cypress for frontend.
+11. **Simplified quality scoring** — Current engine is heuristic (readability, structure). No LLM-based evaluation.
+12. **No pagination on bulk endpoints** — Bulk job download returns full CSV without streaming. Large jobs will OOM.
+13. ~~**No request validation hardening**~~ — Partially done ✅: CSV uploads capped at 5 MiB, debug default off, production refuses default secrets, CORS echoes origin in dev. Still missing: request timeouts, explicit CORS allowlist for production.
+14. **No database backups** — No backup strategy documented or automated.
 
 ### Medium Priority
-13. **No API documentation hosting** — FastAPI auto-generates OpenAPI at `/docs` but no hosted Swagger UI deployment.
-14. **No structured error responses** — HTTP errors return basic messages, not RFC 7807 problem details.
-15. **No content moderation** — No automated safety/appropriateness checks on generated content.
-16. **No streaming responses** — Long-running generation blocks the request.
-17. **No multi-workspace admin** — No super-admin dashboard across workspaces.
-18. **No prompt A/B testing** — Can't test different prompt templates in experiments.
-19. **No content personalization** — No audience-segment-specific content variants.
-20. **No webhook retry** — Failed webhooks are not retried.
+15. **No API documentation hosting** — FastAPI auto-generates OpenAPI at `/docs` but no hosted Swagger UI deployment.
+16. **No structured error responses** — HTTP errors return basic messages, not RFC 7807 problem details.
+17. **No content moderation** — No automated safety/appropriateness checks on generated content.
+18. **No streaming responses** — Long-running generation blocks the request (`/generate/stream` is a stub).
+19. **No multi-workspace admin** — No super-admin dashboard across workspaces.
+20. **No prompt A/B testing** — Can't test different prompt templates in experiments.
+21. **No content personalization** — No audience-segment-specific content variants.
+22. **No webhook retry** — Failed webhooks are not retried.
 
 ### Low Priority
-21. **No OpenTelemetry collector** — OTEL SDK is wired but no collector configured.
-22. **No distributed tracing** — Traces are generated but not exported anywhere.
-23. **No feature flags** — All features are always on.
-24. **No GraphQL API** — REST only. GraphQL could benefit complex queries.
-25. **No real-time notifications** — No WebSocket/SSE for live updates.
+23. **No OpenTelemetry collector** — OTEL SDK is wired but no collector configured.
+24. **No distributed tracing** — Traces are generated but not exported anywhere.
+25. **No feature flags** — All features are always on.
+26. **No GraphQL API** — REST only. GraphQL could benefit complex queries.
+27. **No real-time notifications** — No WebSocket/SSE for live updates.
+28. **Missing LICENSE file** — README declares MIT but no `LICENSE` file is committed.
 
 ---
 
@@ -149,9 +154,9 @@ Prioritized roadmap for next iteration:
 
 ### Phase 1: Production Readiness (1-2 weeks)
 - [ ] **GitHub Actions CI/CD** — test, lint, typecheck, build, deploy to staging
-- [ ] **k8s ConfigMap** — Create `k8s/configmap.yaml` with all environment variables
+- [x] **k8s ConfigMap** — `k8s/configmap.yaml` added in the 2026-08-31 review pass
 - [ ] **Rate limiting** — Add per-tenant rate limits (e.g., 100 req/min for API, 10 bulk jobs/hour)
-- [ ] **Request validation** — Max upload size (10MB), request timeout (30s), CORS whitelist
+- [x] **Request validation** — CSV uploads capped at 5 MiB (2026-08-31); request timeout (30s) and production CORS allowlist still open
 - [ ] **Database backups** — Automated daily backups to S3 with 30-day retention
 - [ ] **Secrets management** — Use sealed-secrets or AWS Secrets Manager / Vault
 

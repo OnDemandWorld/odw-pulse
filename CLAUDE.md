@@ -4,12 +4,12 @@ This file provides guidance to AI coding agents (Claude Code, Copilot, etc.) whe
 
 ## Repository Status
 
-**This is a fully implemented codebase.** All 10 checkpoints from the planning phase are complete. The backend API, frontend SPA, worker, scheduler, and deployment artifacts are all implemented with passing tests and clean lint/type checks.
+**This is a fully implemented codebase.** All 10 checkpoints from the planning phase are complete, and a full review/refactor pass landed on 2026-08-31 (see `PLAN.md`). The backend API, frontend SPA, worker, scheduler, and deployment artifacts are all implemented with passing tests and clean lint/type checks.
 
-- **Backend:** 90 Python source files, 57 tests passing
-- **Frontend:** 13 TypeScript/React files, clean typecheck and build
-- **Deployment:** Docker Compose (7 services) + Kubernetes manifests (9 YAML files)
-- **Status:** All checks pass — `make test && make lint && make typecheck` clean
+- **Backend:** 90 Python source files, 59 tests passing
+- **Frontend:** 18 TypeScript/React files, clean typecheck, lint, and build
+- **Deployment:** Docker Compose (7 services) + Kubernetes manifests (10 YAML files)
+- **Status:** All checks pass — `make test && make lint && make typecheck` clean (plus `npm run typecheck && npm run lint && npm run build` in pulse-ui)
 
 ## Codebase Overview
 
@@ -31,12 +31,12 @@ odw-pulse/
 │   │   ├── quality/      # Heuristic quality scoring engine
 │   │   ├── services/     # Business logic layer
 │   │   └── worker/       # Redis Streams consumer for bulk jobs
-│   └── tests/            # 57 tests across 10 files
+│   └── tests/            # 59 tests across 10 files
 ├── pulse-ui/             # React 18 + TypeScript + Vite SPA
 │   └── src/
 │       ├── api/          # Axios HTTP client
-│       ├── components/   # Layout, NavLink
-│       ├── pages/        # 7 pages (Dashboard, Generate, Content, BulkJobs, Experiments, Settings)
+│       ├── components/   # Layout, NavLink, RequireAuth, ErrorBoundary
+│       ├── pages/        # 9 pages (Dashboard, Generate, ContentList, ContentDetail, BulkJobs, Experiments, Settings, Login, NotFound)
 │       └── types/        # TypeScript type definitions
 ├── pulse-worker/         # Standalone async worker package
 ├── pulse-scheduler/      # Standalone scheduler package
@@ -86,7 +86,7 @@ FastAPI monolith with SQLAlchemy 2.0 async ORM and PostgreSQL RLS.
 
 React 18 SPA with TypeScript, Vite, TanStack Query, React Router v6, Tailwind CSS.
 
-**Pages:** Dashboard, Generate, ContentList, ContentDetail, BulkJobs, Experiments, Settings
+**Pages:** Dashboard, Generate, ContentList, ContentDetail, BulkJobs, Experiments, Settings, Login, NotFound
 
 **Key patterns:**
 - API client: axios instance with base URL from `VITE_API_URL`
@@ -102,8 +102,8 @@ Partitioned tables: content (HASH by workspace_id), audit_log (RANGE by created_
 
 ### Deployment
 
-- **Docker Compose (dev):** postgres, redis, minio, pulse-api, pulse-worker, pulse-scheduler, pulse-ui
-- **Kubernetes (prod):** StatefulSet for Postgres, Deployments for app services (2 replicas for API/UI/worker, 1 for scheduler), nginx ingress
+- **Docker Compose (dev):** postgres, redis, minio, pulse-api, pulse-worker, pulse-scheduler, pulse-ui (UI is a multi-stage nginx build that proxies `/api` to pulse-api)
+- **Kubernetes (prod):** StatefulSet for Postgres, Deployments for app services (2 replicas for API/UI/worker, 1 for scheduler), nginx ingress, `pulse-config` ConfigMap + `pulse-secrets` Secret
 
 ## Build & Verification Commands
 
@@ -115,7 +115,7 @@ make build                      # Build all Docker images
 # Backend (from pulse-api/)
 source .venv/bin/activate
 uvicorn pulse.main:app --reload --port 8000   # Run API
-pytest tests -v                                # 57 tests, ~2.6s
+pytest tests -v                                # 59 tests, ~2.8s
 ruff check src tests                           # Lint (90 files)
 mypy src                                       # Type check strict (90 files)
 
@@ -163,18 +163,20 @@ alembic upgrade head
 
 ## Known Gaps
 
-See `DEVELOPMENT.md` for the full list. Top priorities:
+See `DEVELOPMENT.md` for the full list and `PLAN.md` for the review report & roadmap. Top priorities:
 
 1. **No CI/CD** — No `.github/workflows/`. Tests/lint/build run manually.
-2. **k8s ConfigMap missing** — Manifests reference `pulse-config` ConfigMap that doesn't exist.
-3. **Analytics connectors are stubs** — GA4/Mixpanel/Segment log calls but don't send data.
-4. **Vault connector is a mock** — Returns canned responses, doesn't call real API.
-5. **No rate limiting** — No per-tenant or per-IP limits.
-6. **Worker/scheduler inconsistency** — Launched from pulse-api venv in Makefile but are separate packages.
-7. **No E2E tests** — Only unit/integration tests via pytest.
-8. **Heuristic quality scoring** — No LLM-based evaluation.
-9. **No pagination on bulk endpoints** — Large jobs will OOM.
-10. **No streaming responses** — Long-running generation blocks the request.
+2. **RLS not yet binding** — Real workspace policies + `SET LOCAL pulse.workspace_id` hook exist, but the app connects as table owner; a dedicated non-owner DB role (or `FORCE ROW LEVEL SECURITY`) is needed for actual enforcement. Service-layer workspace filtering is the current isolation boundary.
+3. **Auth is a mock** — Login validates a hardcoded dev user; no user management or workspace membership model (impersonation only checks the target workspace exists).
+4. **Analytics connectors are stubs** — GA4/Mixpanel/Segment log calls but don't send data.
+5. **Vault connector is a mock** — Returns canned responses, doesn't call real API.
+6. **No rate limiting** — No per-tenant or per-IP limits.
+7. **Standalone worker is a stub** — `pulse-worker` has no Redis Streams consumer yet; bulk jobs run in-process inside pulse-api.
+8. **No E2E tests** — Only unit/integration tests via pytest.
+9. **Heuristic quality scoring** — No LLM-based evaluation.
+10. **No pagination on bulk endpoints** — Large jobs will OOM.
+11. **No streaming responses** — Long-running generation blocks the request (`/generate/stream` is a stub).
+12. **Missing LICENSE file** — README declares MIT but no LICENSE file is committed.
 
 ## Future Improvements
 

@@ -10,10 +10,11 @@ ODW Pulse is a multilingual content generation platform that produces culturally
 
 | Check | Status |
 |---|---|
-| Backend Tests (57) | ✅ Passing |
+| Backend Tests (59) | ✅ Passing |
 | Backend Lint (ruff, 90 files) | ✅ Clean |
 | Backend Types (mypy strict, 90 files) | ✅ Clean |
 | Frontend Types (TypeScript) | ✅ Clean |
+| Frontend Lint (ESLint) | ✅ Clean |
 | Frontend Build (Vite) | ✅ Clean |
 
 ## Key Differentiators
@@ -103,14 +104,20 @@ make dev
 
 This starts: PostgreSQL, Redis, MinIO, pulse-api, pulse-worker, pulse-scheduler, pulse-ui.
 
+The UI is served at `http://localhost:5173`. Sign in with the development mock user: `test@example.com` / `testpassword` (see `pulse-api/src/pulse/api/v1/auth.py` — real user management is on the roadmap).
+
 ### Individual Services
 
 ```bash
+# One-time: create pulse-api/.venv and install all three Python packages
+make install
+
 # Backend API
-cd pulse-api
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-uvicorn pulse.main:app --reload --port 8000
+make api
+
+# Worker / scheduler (run from the shared venv)
+make worker
+make scheduler
 
 # Frontend
 cd pulse-ui
@@ -153,16 +160,16 @@ odw-pulse/
 │   │   ├── quality/      # Quality scoring engine
 │   │   ├── services/     # Business logic layer
 │   │   └── worker/       # Redis Streams worker
-│   └── tests/            # 57 tests (10 files)
-├── pulse-ui/             # React SPA (13 source files)
+│   └── tests/            # 59 tests (10 files)
+├── pulse-ui/             # React SPA (18 source files)
 │   └── src/
 │       ├── api/          # Axios HTTP client
-│       ├── components/   # Layout, NavLink
-│       ├── pages/        # 7 pages
+│       ├── components/   # Layout, NavLink, RequireAuth, ErrorBoundary
+│       ├── pages/        # 9 pages (incl. Login, NotFound)
 │       └── types/        # TypeScript type definitions
 ├── pulse-worker/         # Standalone worker package
 ├── pulse-scheduler/      # Standalone scheduler package
-├── k8s/                  # Kubernetes manifests (9 YAML files)
+├── k8s/                  # Kubernetes manifests (10 YAML files)
 ├── docker-compose.yml    # Full dev stack
 ├── Makefile              # Development commands
 ├── .env.example          # Environment template
@@ -179,6 +186,7 @@ odw-pulse/
 
 | Command | Description |
 |---|---|
+| `make install` | Create the shared venv with all Python packages |
 | `make dev` | Start full Docker Compose stack |
 | `make api` | Run API server locally (with reload) |
 | `make worker` | Run async worker locally |
@@ -195,12 +203,12 @@ All endpoints are under `/api/v1/`:
 
 | Router | Key Endpoints |
 |---|---|
-| `auth` | `POST /register`, `POST /login`, `GET /me` |
-| `generate` | `POST /generate` (single content), `POST /generate/bulk` |
-| `content` | `GET/PUT/DELETE /content`, `POST /:id/review`, `POST /:id/export` |
-| `bulk_jobs` | `POST /bulk-jobs`, `GET /bulk-jobs/:id`, `GET /:id/download` |
-| `experiments` | `POST /experiments`, `GET /:id/results`, `POST /:id/promote-winner` |
-| `integrations` | `POST /integrations/vault/test`, `POST /integrations/storage/test`, etc. |
+| `auth` | `POST /auth/login`, `GET /auth/me`, `POST /auth/impersonate` |
+| `generate` | `POST /generate`, `POST /generate/stream` (SSE stub) |
+| `content` | `GET/POST /content`, `GET/PUT/DELETE /content/:id`, `POST /:id/submit|approve|reject|request-changes`, `GET /:id/versions`, `GET /:id/export` |
+| `bulk_jobs` | `POST /bulk-jobs` (CSV upload), `GET /bulk-jobs/:id`, `POST /:id/pause|resume|cancel`, `GET /:id/download` |
+| `experiments` | `POST /experiments`, `POST /:id/start|pause|stop`, `GET /:id/results`, `POST /:id/promote-winner`, `POST /performance-events` |
+| `integrations` | `POST/GET /webhooks`, `DELETE /webhooks/:id`, `POST /webhooks/:id/test` |
 
 ## Deployment
 
@@ -215,6 +223,7 @@ make dev
 ```bash
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/secrets.yaml  # Copy from k8s/secrets.example.yaml
+kubectl apply -f k8s/configmap.yaml
 kubectl apply -f k8s/postgres.yaml
 kubectl apply -f k8s/redis.yaml
 kubectl apply -f k8s/pulse-api.yaml
@@ -238,5 +247,5 @@ This repository is built to be extended with AI coding agents. Rather than a tur
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. Note: the `LICENSE` file itself is not yet in the repository — see `PLAN.md`.
 
