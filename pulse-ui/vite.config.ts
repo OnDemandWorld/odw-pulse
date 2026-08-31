@@ -11,9 +11,13 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    host: true,
     proxy: {
+      // Overridable so the dev server works both on the host
+      // (`make ui`, API on localhost:8000) and inside docker-compose
+      // (API_PROXY_TARGET=http://pulse-api:8000).
       '/api': {
-        target: 'http://localhost:8000',
+        target: process.env.API_PROXY_TARGET || 'http://localhost:8000',
         changeOrigin: true,
       },
     },

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -38,6 +36,11 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   pulse-api:
     build:
@@ -49,12 +52,23 @@ services:
       DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
       REDIS_URL: redis://redis:6379/0
       STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin
+      STORAGE_USE_SSL: "false"
     env_file:
-      - .env
+      - path: .env
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
   pulse-worker:
@@ -65,7 +79,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
       REDIS_URL: redis://redis:6379/0
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,7 +95,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
       REDIS_URL: redis://redis:6379/0
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,11 +108,14 @@ services:
       context: ./pulse-ui
       dockerfile: Dockerfile
     ports:
-      - "5173:5173"
+      - "5173:80"
     environment:
-      VITE_API_URL: http://pulse-api:8000
+      # Upstream the nginx container proxies /api requests to (in-cluster or
+      # compose service DNS names, not localhost).
+      API_UPSTREAM: http://pulse-api:8000
     depends_on:
-      - pulse-api
+      pulse-api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
