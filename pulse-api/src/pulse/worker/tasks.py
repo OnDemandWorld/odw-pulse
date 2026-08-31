@@ -100,6 +100,7 @@ async def process_bulk_job(
         orchestrator = get_orchestrator()
         results: list[dict[str, Any]] = []
         errors: dict[str, Any] = {}
+        unreported = 0  # Rows processed since the last progress DB write.
 
         for idx, row in enumerate(rows):
             # ---- pause / cancel gate ----
@@ -130,8 +131,10 @@ async def process_bulk_job(
                 results.append({**row, "error": str(exc)})
 
             # ---- progress ----
-            if (idx + 1) % PROGRESS_BATCH == 0 or idx == len(rows) - 1:
-                await svc.increment_progress(db, jid, job.workspace_id, count=1)
+            unreported += 1
+            if unreported >= PROGRESS_BATCH or idx == len(rows) - 1:
+                await svc.increment_progress(db, jid, job.workspace_id, count=unreported)
+                unreported = 0
 
         # ---- write output ----
         output_path = _write_output_csv(jid, results)

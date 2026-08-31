@@ -17,6 +17,9 @@ from pulse.models.market_profile import MarketProfile
 _cache: dict[str, dict[str, Any]] = {}
 _cache_enabled: bool = True
 
+# Safety limit for market fallback chains (protects against cycles).
+_MAX_FALLBACK_DEPTH = 5
+
 
 def set_cache_enabled(enabled: bool) -> None:
     """Enable or disable the market profile cache."""
@@ -96,12 +99,24 @@ async def load_market_profile_with_fallback(
     if profile is not None:
         return profile
 
-    # Try loading from cache to find fallback_code
-    if _cache_enabled and market_code in _cache:
-        cached = _cache[market_code]
-        fallback = cached.get("fallback_code")
-        if fallback:
-            return await load_market_profile(session, fallback)
+    # Follow the fallback chain. ``load_market_profile`` does not cache
+    # misses, so the fallback_code must be read from the database directly
+    # (the row may exist but be inactive, in which case it still points at
+    # its fallback).
+    current = market_code
+    seen: set[str] = {market_code}
+    for _ in range(_MAX_FALLBACK_DEPTH):
+        result = await session.execute(
+            select(MarketProfile.fallback_code).where(MarketProfile.code == current)
+        )
+        fallback_code = result.scalar_one_or_none()
+        if not fallback_code or fallback_code in seen:
+            return None
+        seen.add(fallback_code)
+        profile = await load_market_profile(session, fallback_code)
+        if profile is not None:
+            return profile
+        current = fallback_code
 
     return None
 

@@ -54,7 +54,7 @@ def chi_squared_test(
             "is_significant": False,
         }
 
-    # Chi-squared statistic with Yates' correction
+    # Pearson chi-squared statistic for a 2x2 table (no Yates correction)
     numerator = (n * (a * d - b * c) ** 2)
     denominator = (a + b) * (c + d) * (a + c) * (b + d)
 
@@ -68,9 +68,10 @@ def chi_squared_test(
 
     chi2 = numerator / denominator
 
-    # Approximate p-value from chi-squared distribution (df=1)
-    # Using approximation: p ≈ exp(-chi2/2) for df=1
-    p_value = math.exp(-chi2 / 2)
+    # Exact survival function of the chi-squared distribution with df=1:
+    # P(X > chi2) = erfc(sqrt(chi2 / 2)).  (chi2 with df=1 is Z^2 for a
+    # standard normal Z, so this equals 2 * (1 - Phi(sqrt(chi2))).)
+    p_value = math.erfc(math.sqrt(chi2 / 2))
 
     # Confidence level
     confidence_level = 1 - p_value
