@@ -119,8 +119,27 @@ Not yet verifiable on this machine: Docker image builds and a live `docker compo
 1. **RLS policies are correct but not yet enforced.** The app connects as the table *owner*; PostgreSQL skips RLS for owners unless `FORCE ROW LEVEL SECURITY` is set or a separate role is used. The service-layer `workspace_id` filters remain the actual isolation boundary. Fixing this properly is Phase 2 work (dedicated DB role).
 2. **Migration `001` was edited in place.** Correct for a pre-production project, but any database that already ran the old `001` must be recreated or manually patched.
 3. **Auth is still a mock** (hardcoded dev user). It is now *safely* mocked (tokens verified, DB failures not swallowed), but user management doesn't exist.
-4. **The standalone worker still doesn't consume** — bulk jobs run in-process inside pulse-api (as before). The packages now start/stop cleanly and the path to move the consumer is clear (Phase 1).
+4. ~~**The standalone worker still doesn't consume**~~ — resolved in the Phase 1 pass below.
 5. **K8s has no MinIO/object storage** — `STORAGE_ENDPOINT` defaults to disabled; document or deploy external S3 before using storage features on a cluster.
+
+### Follow-up pass (2026-09-01) — Phase 0 + Phase 1 landed
+
+**Phase 0 (quick wins):**
+- `LICENSE` (MIT) committed — README link no longer dangling.
+- **GitHub Actions CI** (`.github/workflows/ci.yml`): backend tests/lint/mypy, frontend typecheck/lint/build, YAML validation of all manifests, and Docker builds of all four images on every push/PR.
+- `index.html` gained description/theme-color/favicon.
+- Postgres PVC `storageClassName` requirement documented; postgres + redis workloads got probes/resources.
+- **Fixed a leftover from the first pass:** `k8s/postgres.yaml` still referenced the old dashed Secret key (`postgres-password`) — the StatefulSet could not have started.
+- **Webhook SSRF guard** (Phase 3.2 pulled forward — the highest open security item): `pulse/integrations/webhooks/url_guard.py` rejects non-http(s) schemes (https-only in production) and any host resolving to loopback/private/link-local/multicast/reserved/unspecified addresses; enforced at webhook registration *and* test dispatch; 11 new tests. Residual DNS-rebinding risk documented in the module docstring.
+
+**Phase 1 (real bulk-job pipeline):**
+- `POST /bulk-jobs` now **enqueues durably to the Redis stream** (`pulse.worker.dispatch.enqueue_job`), with automatic in-process fallback when Redis is unreachable.
+- **`pulse-worker` is a real consumer**: `XREADGROUP` with consumer group `bulk_workers`, `XACK` on success, failed jobs left pending, periodic `XAUTOCLAIM` recovery of messages stuck with dead consumers, delivery-count tracking with **dead-lettering** after 5 attempts (job marked FAILED with a reason), poison-message handling, reconnect-with-backoff across Redis outages, Prometheus counters (`pulse_worker_jobs_total`, optional `PULSE_METRICS_PORT` server), and at-least-once-safe processing (`process_bulk_job` skips jobs no longer PENDING).
+- **Stale-job reaper** (`pulse.worker.maintenance.reap_stale_jobs`): RUNNING jobs without updates for 10 min are failed with an explanation; never-picked-up PENDING jobs are re-enqueued. Runs at worker startup **and** as a scheduler job every 5 minutes (the scheduler's first real duty).
+- Worker/scheduler images now install `pulse-api` alongside their own package (root build context); compose/Makefile/CI updated to match; root `.dockerignore` added.
+- 12 new tests (dispatch fallback, ack/retry/dead-letter/poison semantics, reaper behavior). Suite is now **80 tests**; backend is 93 source files.
+
+Still open from these phases: live `docker compose up` / cluster smoke test (needs a Docker host), registry push + tag pinning (needs registry credentials), worker liveness probes (no HTTP surface yet — metrics port is the path).
 
 ---
 
@@ -129,19 +148,19 @@ Not yet verifiable on this machine: Docker image builds and a live `docker compo
 Sequenced so each phase leaves the system shippable. Rough sizes in engineer-days.
 
 ### Phase 0 — Quick wins & verification (1–2 days)
-1. **LICENSE file** — README declares MIT; commit the actual `LICENSE` text. (0.1d)
-2. **Compose/k8s smoke test on a Docker host** — `make dev`, log in through the UI, run one generation and one bulk job end-to-end; `kind`/`minikube` apply of `k8s/`. Closes the one verification gap of this pass. (0.5d)
-3. **GitHub Actions CI** — single workflow: backend `pytest + ruff + mypy`, frontend `typecheck + lint + build`, YAML lint of k8s/, Docker build (no push). The repo has zero CI today; everything above currently depends on humans remembering `make test`. (0.5d)
-4. **index.html meta** — favicon/description/theme-color. (0.1d)
-5. **Image tags** — pin versions instead of `:latest` in k8s manifests; wire CI to push `:sha-<git>`. (0.3d)
-6. **Postgres PVC `storageClassName`** — make explicit (or document the default-SC requirement). (0.1d)
+1. ✅ **LICENSE file** — MIT `LICENSE` committed (2026-09-01).
+2. **Compose/k8s smoke test on a Docker host** — `make dev`, log in through the UI, run one generation and one bulk job end-to-end; `kind`/`minikube` apply of `k8s/`. Closes the one verification gap of this pass. (0.5d) — *still open: needs a Docker host.*
+3. ✅ **GitHub Actions CI** — `.github/workflows/ci.yml`: backend `pytest + ruff + mypy`, frontend `typecheck + lint + build`, YAML validation, Docker builds of all four images (2026-09-01).
+4. ✅ **index.html meta** — favicon/description/theme-color (2026-09-01).
+5. 🔶 **Image tags** — CI builds all images on every push; registry push + `:sha-<git>` pinning in the manifests awaits registry credentials.
+6. ✅ **Postgres PVC `storageClassName`** — requirement documented on the PVC (2026-09-01).
 
-### Phase 1 — Make the job pipeline real (3–5 days)
-The bulk-job path currently works only because it runs inside the API process. To make it production-shaped:
-1. **Move the Redis Streams consumer into `pulse-worker`** — `XGROUP CREATE` + `XREADGROUP COUNT/BLOCK` + `XACK`, pending-entry recovery with exponential backoff, dead-letter after N retries. The in-API `pulse/worker/` code is the reference implementation; delete it from pulse-api once parity is reached (keep an in-process fallback behind a flag for dev).
-2. **Durable dispatch** — `POST /bulk-jobs` should enqueue to the stream and let the worker pick up; the current `asyncio.create_task` is lost on restart. Add a startup sweep that reclaims `RUNNING` jobs whose consumer died.
-3. **Worker observability** — Prometheus counter/gauge for queue depth, processed rows, failures (prometheus-client is already a dependency).
-4. **Scheduler jobs** — replace the heartbeat with real duties: stale-job reaper, webhook retry scan (ties into Phase 3), prompt/report generation hooks.
+### Phase 1 — Make the job pipeline real (3–5 days) ✅ done 2026-09-01
+The bulk-job path is now durable and out-of-process:
+1. ✅ **Redis Streams consumer in `pulse-worker`** — `XREADGROUP` + `XACK`, `XAUTOCLAIM` pending recovery, delivery-count dead-lettering after 5 attempts, reconnect-with-backoff. The in-API `pulse/worker/` modules remain the shared pipeline implementation (the standalone worker imports them); the in-process fallback now only triggers when Redis is down.
+2. ✅ **Durable dispatch** — `POST /bulk-jobs` enqueues to the stream; the stale-job reaper reclaims `RUNNING` jobs whose consumer died and requeues never-started `PENDING` jobs (worker startup + scheduler every 5 min).
+3. ✅ **Worker observability** — `pulse_worker_jobs_total{result}` Prometheus counters; optional metrics HTTP server via `PULSE_METRICS_PORT`.
+4. ✅ **Scheduler jobs** — bulk-job reaper added as the first real scheduled duty (heartbeat retained as proof-of-life). Webhook retry scan lands with Phase 3.
 
 ### Phase 2 — Real identity & enforceable tenancy (1–2 weeks)
 The security skeleton is now correct; it needs a body:

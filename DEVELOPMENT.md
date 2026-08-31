@@ -6,7 +6,7 @@
 
 **Started:** 2026-06-24
 **Completed:** 2026-06-24
-**Last review pass:** 2026-08-31
+**Last review pass:** 2026-08-31 (full review) / 2026-09-01 (Phase 0 + Phase 1: CI, SSRF guard, durable bulk-job pipeline)
 
 ---
 
@@ -66,12 +66,13 @@ make typecheck
 
 | Check | Command | Result |
 |---|---|---|
-| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 59 passed (~2.8s) |
-| Backend lint | `cd pulse-api && ruff check src tests` | ✅ 0 issues (90 files) |
-| Backend typecheck | `cd pulse-api && mypy src` | ✅ 0 issues (90 files) |
+| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 80 passed (~3.0s) |
+| Backend lint | `cd pulse-api && ruff check src tests` | ✅ 0 issues (93 files) |
+| Backend typecheck | `cd pulse-api && mypy src` | ✅ 0 issues (93 files) |
 | Frontend typecheck | `cd pulse-ui && npx tsc --noEmit` | ✅ 0 errors |
 | Frontend build | `cd pulse-ui && npm run build` | ✅ 147 modules, <1s |
 | Frontend lint | `cd pulse-ui && npm run lint` | ✅ 0 warnings (ESLint config added 2026-08-31) |
+| CI | GitHub Actions on push/PR | ✅ backend + frontend + manifests + image builds |
 
 ---
 
@@ -111,7 +112,7 @@ These are known issues that should be addressed before production use.
 (✅ = resolved in the 2026-08-31 review pass; see `PLAN.md`.)
 
 ### Critical (Must fix before production)
-1. **No CI/CD pipeline** — No `.github/workflows/` directory. All checks run manually.
+1. ~~**No CI/CD pipeline**~~ ✅ GitHub Actions workflow added 2026-09-01 (tests, lint, types, builds, manifest validation).
 2. ~~**k8s ConfigMap missing**~~ ✅ Added `k8s/configmap.yaml`; Secret keys renamed to match the env vars the app reads.
 3. **Analytics connectors are stubs** — GA4/Mixpanel/Segment connectors log calls but don't actually send data to external services.
 4. **Vault connector is a mock** — Returns canned responses, doesn't call real Vault API.
@@ -121,7 +122,7 @@ These are known issues that should be addressed before production use.
 8. **Auth is a mock** — `/auth/login` validates against a hardcoded test user; there is no user management, registration, or real workspace membership (impersonation checks only that the target workspace exists).
 
 ### High Priority
-9. ~~**Worker/scheduler launch inconsistency**~~ ✅ `make install` installs all three packages into one venv; `make worker` / `make scheduler` work. The standalone worker still needs a real Redis Streams consumer (see PLAN.md).
+9. ~~**Worker/scheduler launch inconsistency**~~ ✅ `make install` installs all three packages into one venv; `make worker` / `make scheduler` work. The standalone worker is now a real Redis Streams consumer with ack/retry/dead-lettering (2026-09-01, see PLAN.md).
 10. **No E2E tests** — Only unit/integration tests via pytest. No Playwright/Cypress for frontend.
 11. **Simplified quality scoring** — Current engine is heuristic (readability, structure). No LLM-based evaluation.
 12. **No pagination on bulk endpoints** — Bulk job download returns full CSV without streaming. Large jobs will OOM.
@@ -153,7 +154,7 @@ These are known issues that should be addressed before production use.
 Prioritized roadmap for next iteration:
 
 ### Phase 1: Production Readiness (1-2 weeks)
-- [ ] **GitHub Actions CI/CD** — test, lint, typecheck, build, deploy to staging
+- [x] **GitHub Actions CI/CD** — test, lint, typecheck, build (deploy to staging still open)
 - [x] **k8s ConfigMap** — `k8s/configmap.yaml` added in the 2026-08-31 review pass
 - [ ] **Rate limiting** — Add per-tenant rate limits (e.g., 100 req/min for API, 10 bulk jobs/hour)
 - [x] **Request validation** — CSV uploads capped at 5 MiB (2026-08-31); request timeout (30s) and production CORS allowlist still open
