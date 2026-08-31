@@ -2,7 +2,6 @@
 
 import asyncio
 import signal
-from typing import Any
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
@@ -16,7 +15,15 @@ async def tick() -> None:
 
 
 def build_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(
+        job_defaults={
+            # Never run two instances of the same job concurrently and fold
+            # missed fires (e.g. after a pause) into a single run.
+            "coalesce": True,
+            "max_instances": 1,
+            "misfire_grace_time": 60,
+        }
+    )
     # TODO: register real scheduled jobs here
     scheduler.add_job(tick, "interval", seconds=60, id="heartbeat")
     return scheduler
@@ -26,13 +33,19 @@ async def main() -> None:
     logger.info("pulse-scheduler.started")
     scheduler = build_scheduler()
     scheduler.start()
+
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, shutdown_event.set)
+
     try:
-        while True:
-            await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        pass
+        await shutdown_event.wait()
     finally:
-        scheduler.shutdown()
+        # wait=False so shutdown does not block past the container's SIGTERM
+        # grace period (docker then SIGKILLs); running jobs get that grace
+        # period to finish.
+        scheduler.shutdown(wait=False)
         logger.info("pulse-scheduler.stopped")
 
 

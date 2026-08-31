@@ -2,7 +2,6 @@
 
 import asyncio
 import signal
-from typing import Any
 
 import structlog
 
@@ -18,15 +17,10 @@ class Worker:
     async def run(self) -> None:
         """Main worker loop."""
         logger.info("pulse-worker.started")
-        while not self._shutdown_event.is_set():
-            try:
-                # TODO: consume tasks from Redis Streams
-                await asyncio.sleep(1)
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("pulse-worker.loop_error", exc=str(exc))
-                await asyncio.sleep(1)
+        # TODO: consume tasks from Redis Streams (XREADGROUP + XACK). The
+        # in-process implementation lives in pulse-api/src/pulse/worker/ and
+        # should move here so jobs run out-of-process.
+        await self._shutdown_event.wait()
         logger.info("pulse-worker.stopped")
 
     def shutdown(self) -> None:
@@ -34,7 +28,7 @@ class Worker:
 
 
 def _handle_signals(worker: Worker) -> None:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, worker.shutdown)
 

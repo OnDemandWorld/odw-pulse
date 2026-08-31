@@ -1,7 +1,8 @@
-.PHONY: help dev api worker scheduler ui test lint typecheck build
+.PHONY: help install dev api worker scheduler ui test lint typecheck build
 
 help:
 	@echo "Pulse development commands:"
+	@echo "  make install    - Create pulse-api/.venv and install all Python packages"
 	@echo "  make dev        - Start Docker Compose stack"
 	@echo "  make api        - Run API server locally"
 	@echo "  make worker     - Run worker locally"
@@ -11,6 +12,14 @@ help:
 	@echo "  make lint       - Run ruff on backend"
 	@echo "  make typecheck  - Run mypy on backend"
 	@echo "  make build      - Build all Docker images"
+
+# One shared venv for all three Python packages. pulse-worker and
+# pulse-scheduler are separate distributions, so they must be installed
+# editable alongside pulse-api for `make worker` / `make scheduler` to work.
+install:
+	cd pulse-api && python3 -m venv .venv && \
+		.venv/bin/pip install -U pip && \
+		.venv/bin/pip install -e ".[dev]" -e ../pulse-worker -e ../pulse-scheduler
 
 dev:
 	docker compose up --build
