@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -44,6 +46,12 @@ def _compile_uuid_sqlite(element: Any, compiler: Any, **kw: Any) -> str:  # noqa
     return "VARCHAR(36)"
 
 
+# SQLite cannot bind raw Python lists/dicts (PostgreSQL ARRAY / JSONB values).
+# Serialise them as JSON so endpoints storing list/dict columns are testable.
+sqlite3.register_adapter(list, json.dumps)
+sqlite3.register_adapter(dict, json.dumps)
+
+
 # Import content models so they're registered with Base.metadata.
 from pulse.models.bulk_job import BulkJob  # noqa: E402, F401
 from pulse.models.content import ContentPiece, ContentVersion, ReviewAnnotation  # noqa: E402, F401
@@ -80,14 +88,18 @@ async def async_engine() -> AsyncGenerator[Any, None]:
     """Return an async engine backed by in-memory SQLite."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
 
-    # Register gen_random_uuid() function for SQLite
+    # Register gen_random_uuid() function for SQLite.  It must return the
+    # dashless hex form: SQLAlchemy's UUID bind processor renders UUIDs that
+    # way on SQLite, so server-generated ids have to match the format used
+    # in primary-key lookups (a dashed value makes ORM refresh/GET-by-id
+    # fail to find freshly inserted rows).
     from sqlalchemy import event
 
     @event.listens_for(engine.sync_engine, "connect")
     def _register_sqlite_functions(dbapi_connection: Any, connection_record: Any) -> None:  # noqa: ARG001
         """Register PostgreSQL-compatible functions for SQLite."""
         dbapi_connection.create_function(
-            "gen_random_uuid", 0, lambda: str(uuid.uuid4())
+            "gen_random_uuid", 0, lambda: uuid.uuid4().hex
         )
 
     # Create all tables for in-memory testing.

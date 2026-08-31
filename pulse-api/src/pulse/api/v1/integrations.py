@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.deps import CurrentUser, get_db
 from pulse.integrations.webhooks.dispatcher import WebhookDispatcher
+from pulse.integrations.webhooks.url_guard import WebhookURLBlockedError, validate_webhook_url
 from pulse.models.webhook_config import WebhookConfig
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -74,6 +75,13 @@ async def create_webhook(
     db: AsyncSession = Depends(get_db),
 ) -> WebhookRead:
     """Register a new webhook config for the authenticated workspace."""
+    try:
+        validate_webhook_url(data.url)
+    except WebhookURLBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
     config = WebhookConfig(
         workspace_id=current_user.workspace_id,
         url=data.url,
@@ -137,6 +145,15 @@ async def test_webhook(
 ) -> WebhookTestResult:
     """Fire a synthetic ``webhook.test`` event at the subscriber."""
     config = await _get_config_or_404(db, webhook_id, current_user.workspace_id)
+
+    # Re-validate at dispatch time: configs created before the SSRF guard
+    # existed must not become an attack vector.
+    try:
+        validate_webhook_url(config.url)
+    except WebhookURLBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     dispatcher = WebhookDispatcher()
     try:

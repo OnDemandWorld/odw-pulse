@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend — tests, lint, types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pulse-api/pyproject.toml
+            pulse-worker/pyproject.toml
+            pulse-scheduler/pyproject.toml
+
+      - name: Install packages (api + worker + scheduler, editable)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "pulse-api[dev]" -e pulse-worker -e pulse-scheduler pyyaml
+
+      - name: Run tests
+        working-directory: pulse-api
+        run: pytest tests -q
+
+      - name: Lint (ruff)
+        working-directory: pulse-api
+        run: ruff check src tests
+
+      - name: Typecheck (mypy strict)
+        working-directory: pulse-api
+        run: mypy src
+
+      - name: Validate deployment manifests (YAML)
+        run: |
+          python - <<'EOF'
+          import glob
+          import yaml
+
+          files = ["docker-compose.yml"] + sorted(glob.glob("k8s/*.yaml"))
+          for f in files:
+              docs = [d for d in yaml.safe_load_all(open(f)) if d]
+              print(f"{f}: OK ({len(docs)} document(s))")
+          EOF
+
+  frontend:
+    name: Frontend — typecheck, lint, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pulse-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: pulse-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build pulse-api
+        uses: docker/build-push-action@v6
+        with:
+          context: pulse-api
+          push: false
+
+      # worker/scheduler images install pulse-api alongside their own
+      # package, so their build context is the repository root.
+      - name: Build pulse-worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: pulse-worker/Dockerfile
+          push: false
+
+      - name: Build pulse-scheduler
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: pulse-scheduler/Dockerfile
+          push: false
+
+      - name: Build pulse-ui
+        uses: docker/build-push-action@v6
+        with:
+          context: pulse-ui
+          push: false
