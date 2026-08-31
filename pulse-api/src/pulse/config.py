@@ -16,7 +16,9 @@ class Settings(BaseSettings):
 
     # Application
     pulse_env: str = "development"
-    pulse_debug: bool = True
+    # Debug enables SQL statement echoing — noisy and potentially sensitive,
+    # so it must be opted into explicitly (PULSE_DEBUG=true).
+    pulse_debug: bool = False
     pulse_secret_key: str = "change-me-in-production"
     pulse_api_host: str = "0.0.0.0"
     pulse_api_port: int = 8000

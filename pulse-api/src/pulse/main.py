@@ -14,11 +14,34 @@ from pulse.config import get_settings
 from pulse.core.logging import configure_logging
 from pulse.middleware.tenant import TenantMiddleware
 
+# Values that must never reach production unchanged.
+_DEFAULT_SECRET_KEY = "change-me-in-production"
+_DEFAULT_WEBHOOK_SECRET = "whsec_change_me"
+
 
 def create_app() -> FastAPI:
     """Application factory."""
     settings = get_settings()
     configure_logging(settings.pulse_log_level)
+
+    if settings.is_production:
+        insecure_defaults = [
+            name
+            for name, value, default in (
+                ("PULSE_SECRET_KEY", settings.pulse_secret_key, _DEFAULT_SECRET_KEY),
+                (
+                    "WEBHOOK_SIGNING_SECRET",
+                    settings.webhook_signing_secret,
+                    _DEFAULT_WEBHOOK_SECRET,
+                ),
+            )
+            if value == default
+        ]
+        if insecure_defaults:
+            raise RuntimeError(
+                "Refusing to start in production with default secrets: "
+                + ", ".join(insecure_defaults)
+            )
 
     app = FastAPI(
         title="Pulse API",
@@ -26,13 +49,20 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
 
-    # Middleware stack (order matters — first added = outermost)
+    # Middleware stack (order matters — first added = outermost).
+    # In development any origin is allowed; ``allow_origin_regex`` echoes the
+    # request origin back, which — unlike ``allow_origins=["*"]`` — works
+    # with credentialed requests. Production must set explicit origins.
+    if settings.is_development:
+        cors_kwargs: dict[str, object] = {"allow_origin_regex": r".*"}
+    else:
+        cors_kwargs = {"allow_origins": []}
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if settings.is_development else [],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        **cors_kwargs,  # type: ignore[arg-type]
     )
     app.add_middleware(TenantMiddleware)
 

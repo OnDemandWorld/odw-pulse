@@ -10,11 +10,13 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.deps import CurrentUser, get_db
 from pulse.auth.models import ImpersonateRequest, LoginRequest, TokenResponse
 from pulse.auth.security import create_access_token, hash_password, verify_password
+from pulse.models.workspace import Workspace
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -85,13 +87,29 @@ async def me(
 async def impersonate(
     body: ImpersonateRequest,
     current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
-    """Issue a new token scoped to *target_workspace_id* (admin only)."""
+    """Issue a new token scoped to *target_workspace_id* (admin only).
+
+    The target workspace must exist.  TODO: once real user/workspace
+    membership is implemented, also verify that the requesting user is an
+    owner/admin of the target workspace before issuing the token.
+    """
     if current_user.role not in ("admin", "owner"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can impersonate",
         )
+
+    result = await db.execute(
+        select(Workspace.id).where(Workspace.id == body.target_workspace_id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target workspace does not exist",
+        )
+
     token = create_access_token(
         user_id=current_user.user_id,
         email=current_user.email,

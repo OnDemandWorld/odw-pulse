@@ -19,6 +19,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.auth.models import UserInToken
@@ -64,16 +65,11 @@ class WorkspaceContext:
 
 
 # ---------------------------------------------------------------------------
-# PostgreSQL RLS helper
+# PostgreSQL RLS context
 # ---------------------------------------------------------------------------
-
-
-async def _set_rls_context(session: AsyncSession, workspace_id: uuid.UUID) -> None:
-    """Set the PostgreSQL session variable used by RLS policies."""
-    await session.execute(
-        text("SET LOCAL pulse.workspace_id = :wid"),
-        {"wid": str(workspace_id)},
-    )
+# The ``pulse.workspace_id`` setting consumed by the RLS policies is applied
+# to every transaction by the ``after_begin`` hook in ``pulse.db.session``;
+# this module only publishes the workspace via ``WorkspaceContext``.
 
 
 # ---------------------------------------------------------------------------
@@ -111,9 +107,14 @@ async def get_current_user(
     email = str(payload["email"])
     role = str(payload["role"])
 
+    # Publish the workspace scope for the DB layer (RLS SET LOCAL hook).
+    WorkspaceContext.set(workspace_id)
+
     # Best-effort DB lookup — fall back to token payload when the row is
     # absent (supports mock-user login during early development) or when
-    # the table does not exist yet (tests, fresh installations).
+    # the table does not exist yet (tests, fresh installations).  Any other
+    # database failure is surfaced, so an unreachable database cannot be
+    # used to bypass the active-user check.
     try:
         result = await session.execute(
             text("SELECT id, is_active FROM users WHERE id = :id"),
@@ -126,9 +127,16 @@ async def get_current_user(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
     except HTTPException:
         raise
-    except Exception:  # noqa: BLE001
-        # Table does not exist or other DB error — accept token as-is.
-        pass
+    except (ProgrammingError, OperationalError) as exc:
+        message = str(exc.orig) if exc.orig is not None else str(exc)
+        if "no such table" in message.lower() or "does not exist" in message.lower():
+            # users table not migrated yet — accept the token claims.
+            pass
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to validate user right now",
+            ) from exc
 
     return UserInToken(
         user_id=user_id,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -140,12 +141,17 @@ class ContentService:
                 detail=f"Cannot update content in '{content.status.value}' status",
             )
 
+        # Explicit allowlist — never blindly setattr from request data, so a
+        # future schema field can't overwrite identity/status columns.
         update_data = data.model_dump(exclude_unset=True)
-        for field, value in update_data.items():
-            if field == "metadata":
-                content.metadata_ = value
-            else:
-                setattr(content, field, value)
+        if "title" in update_data:
+            content.title = update_data["title"]
+        if "body" in update_data:
+            content.body = update_data["body"]
+        if "market_code" in update_data:
+            content.market_code = update_data["market_code"]
+        if "metadata" in update_data:
+            content.metadata_ = update_data["metadata"]
 
         content.updated_at = datetime.now(UTC)
         await db.commit()
@@ -280,22 +286,19 @@ class ContentService:
 
     def _export_html(self, content: ContentPiece) -> str:
         """Export content as HTML."""
-        body_escaped = (
-            (content.body or "")
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
+        title_escaped = html.escape(content.title)
+        slug_escaped = html.escape(content.slug)
+        body_escaped = html.escape(content.body or "")
         return (
             "<!DOCTYPE html>\n"
             "<html>\n"
             "<head>\n"
-            f"  <title>{content.title}</title>\n"
-            f"  <meta name=\"slug\" content=\"{content.slug}\">\n"
+            f"  <title>{title_escaped}</title>\n"
+            f"  <meta name=\"slug\" content=\"{slug_escaped}\">\n"
             f"  <meta name=\"status\" content=\"{content.status.value}\">\n"
             "</head>\n"
             "<body>\n"
-            f"  <h1>{content.title}</h1>\n"
+            f"  <h1>{title_escaped}</h1>\n"
             f"  <div>{body_escaped}</div>\n"
             "</body>\n"
             "</html>"

@@ -1,13 +1,14 @@
 """Security utilities: JWT token management and password hashing.
 
 Uses ``python-jose`` for JWT and ``bcrypt`` for password hashing.
-Falls back to a SHA-256 based scheme when *bcrypt* is not installed so that
-the codebase remains importable in minimal environments (tests, CI).
+bcrypt is required for creating new password hashes; a legacy SHA-256 based
+scheme is still recognised (but never written) for backwards compatibility.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -17,7 +18,10 @@ from jose import JWTError, jwt  # type: ignore[import-untyped]
 from pulse.config import get_settings
 
 # ---------------------------------------------------------------------------
-# Optional bcrypt import — fall back to plain hashing when unavailable.
+# bcrypt is a hard requirement for hashing new passwords (it is a declared
+# dependency via passlib[bcrypt]).  A legacy single-iteration SHA-256 scheme
+# ("plain:...") is still *verified* for backwards compatibility, but never
+# created anymore.
 # ---------------------------------------------------------------------------
 try:
     import bcrypt as _bcrypt
@@ -31,13 +35,19 @@ except ImportError:  # pragma: no cover - only in stripped environments
 
 
 def hash_password(password: str) -> str:
-    """Return a secure hash of *password*."""
-    if _HAS_BCRYPT:
-        salt = _bcrypt.gensalt()
-        hashed: bytes = _bcrypt.hashpw(password.encode("utf-8"), salt)
-        return hashed.decode("utf-8")
-    salt_str = uuid.uuid4().hex
-    return f"plain:{salt_str}:{hashlib.sha256((salt_str + password).encode()).hexdigest()}"
+    """Return a secure bcrypt hash of *password*.
+
+    Raises:
+        RuntimeError: If bcrypt is not installed.  Falling back to a weak
+            scheme silently would be a security footgun, so fail loudly.
+    """
+    if not _HAS_BCRYPT:
+        raise RuntimeError(
+            "bcrypt is required for password hashing — install passlib[bcrypt]"
+        )
+    salt = _bcrypt.gensalt()
+    hashed: bytes = _bcrypt.hashpw(password.encode("utf-8"), salt)
+    return hashed.decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -48,9 +58,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
             hashed_password.encode("utf-8"),
         )
     if hashed_password.startswith("plain:"):
+        # Legacy fallback scheme — verify in constant time.
         _, salt_str, expected_hash = hashed_password.split(":", 2)
         actual = hashlib.sha256((salt_str + plain_password).encode()).hexdigest()
-        return actual == expected_hash
+        return hmac.compare_digest(actual, expected_hash)
     return False
 
 

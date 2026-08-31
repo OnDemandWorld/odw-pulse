@@ -164,6 +164,7 @@ async def app_fixture(async_session: AsyncSession) -> Any:
     from pulse.api.v1 import bulk_jobs as bulk_jobs_v1
     from pulse.api.v1 import content as content_v1
     from pulse.api.v1 import experiments as experiments_v1
+    from pulse.api.v1 import generate as generate_v1
     from pulse.api.v1 import integrations as integrations_v1
     from pulse.middleware.tenant import TenantMiddleware
 
@@ -178,6 +179,7 @@ async def app_fixture(async_session: AsyncSession) -> Any:
     app.add_middleware(TenantMiddleware)
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(auth_v1.router, prefix="/api/v1")
+    app.include_router(generate_v1.router, prefix="/api/v1")
     app.include_router(content_v1.router, prefix="/api/v1")
     app.include_router(bulk_jobs_v1.router, prefix="/api/v1")
     app.include_router(integrations_v1.router, prefix="/api/v1")

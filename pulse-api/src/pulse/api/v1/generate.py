@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from pulse.api.deps import CurrentUser
 from pulse.generation.models import GenerationRequest, GenerationResult
 from pulse.generation.orchestrator import GenerationOrchestrator
 from pulse.llm import FallbackRouter, get_registry
@@ -61,7 +62,7 @@ def get_orchestrator() -> GenerationOrchestrator:
 
 
 @router.post("/generate", response_model=GenerationResult)
-async def generate(request: GenerationRequest) -> GenerationResult:
+async def generate(request: GenerationRequest, current_user: CurrentUser) -> GenerationResult:
     """Generate content based on the provided request.
 
     Accepts a GenerationRequest with content type, target market, prompt,
@@ -69,10 +70,12 @@ async def generate(request: GenerationRequest) -> GenerationResult:
 
     Args:
         request: The generation request
+        current_user: Authenticated user (generation is not anonymous)
 
     Returns:
         GenerationResult with content, quality score, and metadata
     """
+    _ = current_user  # Authentication enforced by the dependency itself.
     try:
         orchestrator = get_orchestrator()
         result = await orchestrator.generate(request)
@@ -85,7 +88,9 @@ async def generate(request: GenerationRequest) -> GenerationResult:
 
 
 @router.post("/generate/stream")
-async def generate_stream(request: GenerationRequest) -> StreamingResponse:
+async def generate_stream(
+    request: GenerationRequest, current_user: CurrentUser
+) -> StreamingResponse:
     """Generate content with Server-Sent Events streaming (stub).
 
     This endpoint is a stub for future streaming implementation.
@@ -93,10 +98,12 @@ async def generate_stream(request: GenerationRequest) -> StreamingResponse:
 
     Args:
         request: The generation request
+        current_user: Authenticated user (generation is not anonymous)
 
     Returns:
         StreamingResponse with SSE events
     """
+    _ = current_user  # Authentication enforced by the dependency itself.
     try:
         orchestrator = get_orchestrator()
         result = await orchestrator.generate(request)

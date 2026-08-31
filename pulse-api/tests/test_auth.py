@@ -135,14 +135,46 @@ async def test_workspace_isolation_user_cannot_access_other_workspace(
 
 
 @pytest.mark.anyio
-async def test_impersonate_returns_new_token(authorized_client: AsyncClient) -> None:
-    """Admin impersonation should return a token for the target workspace."""
-    target_workspace = uuid.UUID("00000000-0000-0000-0000-000000000042")
+async def test_impersonate_returns_new_token(
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[object, object],
+) -> None:
+    """Admin impersonation into an existing workspace returns a new token."""
+    del test_workspace_and_user  # Fixture side effect: creates the workspace row.
+    from pulse.api.v1.auth import _MOCK_WORKSPACE_ID
+
     response = await authorized_client.post(
         "/api/v1/auth/impersonate",
-        json={"target_workspace_id": str(target_workspace)},
+        json={"target_workspace_id": str(_MOCK_WORKSPACE_ID)},
     )
     assert response.status_code == 200
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+
+
+@pytest.mark.anyio
+async def test_impersonate_unknown_workspace_returns_404(
+    authorized_client: AsyncClient,
+) -> None:
+    """Impersonation must refuse to issue tokens for workspaces that don't exist."""
+    nonexistent = uuid.UUID("00000000-0000-0000-0000-000000000042")
+    response = await authorized_client.post(
+        "/api/v1/auth/impersonate",
+        json={"target_workspace_id": str(nonexistent)},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_generate_without_token_401(client: AsyncClient) -> None:
+    """LLM generation endpoints must require authentication (cost protection)."""
+    response = await client.post(
+        "/api/v1/generate",
+        json={
+            "content_type": "blog_post",
+            "target_market": "en-US",
+            "prompt": "Write about AI",
+        },
+    )
+    assert response.status_code == 401

@@ -11,11 +11,12 @@
 
 from __future__ import annotations
 
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,9 +28,10 @@ router = APIRouter(prefix="/bulk-jobs", tags=["bulk-jobs"])
 
 _bulk_job_service = BulkJobService()
 
-# Shared storage directories (must match worker.tasks).
-import tempfile  # noqa: E402
+# Maximum accepted CSV upload size (5 MiB).
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
+# Shared storage directories (must match worker.tasks).
 _UPLOAD_DIR = Path(tempfile.gettempdir()) / "pulse_bulk_uploads"
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -59,16 +61,26 @@ async def create_bulk_job(
     stream (or falls back to an in-process background task).
     """
     if not file.filename or not file.filename.endswith(".csv"):
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only CSV files are supported",
         )
 
-    # Persist uploaded file.
-    file_path = _UPLOAD_DIR / f"{uuid.uuid4()}_{file.filename}"
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit",
+        )
+
+    # Persist uploaded file (random prefix neutralises the client-supplied
+    # filename; only the .csv extension was validated above).
     content_bytes = await file.read()
+    if len(content_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit",
+        )
+    file_path = _UPLOAD_DIR / f"{uuid.uuid4()}_{file.filename}"
     file_path.write_bytes(content_bytes)
 
     config = BulkJobConfig(
@@ -220,8 +232,6 @@ async def download_bulk_job_results(
         db=db, job_id=job_id, workspace_id=current_user.workspace_id,
     )
     if not job.output_file or not Path(job.output_file).exists():
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Output file not found",
