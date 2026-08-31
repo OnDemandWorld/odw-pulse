@@ -26,3 +26,10 @@ spec:
               value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
             - name: REDIS_URL
               value: "redis://redis:6379/0"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

@@ -1,3 +1,5 @@
+# Keep replicas: 1 — with more than one replica every scheduled job would
+# fire once per pod (no leader election is implemented yet).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,3 +28,10 @@ spec:
               value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
             - name: REDIS_URL
               value: "redis://redis:6379/0"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

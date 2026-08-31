@@ -24,10 +24,30 @@ spec:
             - secretRef:
                 name: pulse-secrets
           env:
+            # $(POSTGRES_PASSWORD) expands from the pulse-secrets Secret.
             - name: DATABASE_URL
               value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
             - name: REDIS_URL
               value: "redis://redis:6379/0"
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
 ---
 apiVersion: v1
 kind: Service

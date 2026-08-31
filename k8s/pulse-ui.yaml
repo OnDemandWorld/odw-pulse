@@ -17,7 +17,31 @@ spec:
         - name: pulse-ui
           image: ondemandworld/pulse-ui:latest
           ports:
-            - containerPort: 5173
+            - containerPort: 80
+          env:
+            # Upstream for the nginx /api proxy (see pulse-ui/nginx.conf.template).
+            # The in-cluster pulse-api Service listens on port 80.
+            - name: API_UPSTREAM
+              value: "http://pulse-api:80"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -29,4 +53,4 @@ spec:
     app: pulse-ui
   ports:
     - port: 80
-      targetPort: 5173
+      targetPort: 80

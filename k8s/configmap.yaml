@@ -1,0 +1,24 @@
+# Non-sensitive configuration shared by pulse-api, pulse-worker, and
+# pulse-scheduler. Keys must match the environment variable names read by
+# pulse-api's Settings class (pulse-api/src/pulse/config.py).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pulse-config
+  namespace: pulse
+data:
+  PULSE_ENV: "production"
+  PULSE_DEBUG: "false"
+  PULSE_LOG_LEVEL: "info"
+  PULSE_API_HOST: "0.0.0.0"
+  PULSE_API_PORT: "8000"
+  JWT_ALGORITHM: "HS256"
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+  DATABASE_POOL_SIZE: "10"
+  DATABASE_MAX_OVERFLOW: "20"
+  STORAGE_BUCKET: "pulse"
+  STORAGE_REGION: "us-east-1"
+  STORAGE_USE_SSL: "true"
+  # STORAGE_ENDPOINT / STORAGE_ACCESS_KEY / STORAGE_SECRET_KEY are cluster
+  # specific (external S3 or an in-cluster MinIO) — set them here or in
+  # pulse-secrets before deploying.

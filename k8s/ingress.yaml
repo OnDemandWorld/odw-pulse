@@ -3,8 +3,8 @@ kind: Ingress
 metadata:
   name: pulse
   namespace: pulse
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+  # NOTE: no rewrite-target — /api/v1/* must reach pulse-api unmodified
+  # (routers are mounted at /api/v1), and /* must reach the UI as-is.
 spec:
   rules:
     - host: pulse.local
