@@ -7,11 +7,16 @@ name = "pulse-worker"
 version = "0.1.0"
 description = "Pulse async worker for bulk generation jobs"
 requires-python = ">=3.11"
+# NOTE: at runtime the worker also needs pulse-api (it consumes the
+# pulse.worker/pulse.generation pipeline). pulse-api is not on PyPI, so it is
+# installed alongside this package: `pip install ./pulse-api ./pulse-worker`
+# in Docker, or `make install` for local development.
 dependencies = [
     "redis>=5.0.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
     "structlog>=24.1.0",
+    "prometheus-client>=0.20.0",
 ]
 
 [project.optional-dependencies]

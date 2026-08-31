@@ -71,6 +71,17 @@ async def process_bulk_job(
 
     async with session_factory() as db:
         job = await svc.get_job_unscoped(db, jid)
+
+        # At-least-once delivery guard: a message can arrive twice (retry,
+        # requeue after a crash).  Only PENDING jobs still need processing.
+        if job.status != BulkJobStatus.PENDING:
+            logger.info(
+                "Job %s is %s — nothing to do (duplicate delivery?)",
+                job_id,
+                job.status.value,
+            )
+            return
+
         await svc.update_status(db, jid, job.workspace_id, BulkJobStatus.RUNNING)
 
         config_dict = svc.extract_config(job)

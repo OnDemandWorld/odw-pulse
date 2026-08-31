@@ -8,10 +8,25 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
 logger = structlog.get_logger()
 
+# How often to sweep for orphaned bulk jobs.
+_REAP_INTERVAL_SECONDS = 300
+_HEARTBEAT_INTERVAL_SECONDS = 60
+
 
 async def tick() -> None:
-    """Placeholder scheduled task."""
+    """Placeholder scheduled task (proof-of-life log line)."""
     logger.info("pulse-scheduler.tick")
+
+
+async def reap_stale_bulk_jobs() -> None:
+    """Fail abandoned RUNNING bulk jobs and requeue abandoned PENDING ones."""
+    try:
+        from pulse.worker.maintenance import reap_stale_jobs
+
+        stats = await reap_stale_jobs()
+        logger.info("pulse-scheduler.reap", **stats)
+    except Exception as exc:  # keep the scheduler alive regardless
+        logger.error("pulse-scheduler.reap_error", error=str(exc))
 
 
 def build_scheduler() -> AsyncIOScheduler:
@@ -24,8 +39,14 @@ def build_scheduler() -> AsyncIOScheduler:
             "misfire_grace_time": 60,
         }
     )
-    # TODO: register real scheduled jobs here
-    scheduler.add_job(tick, "interval", seconds=60, id="heartbeat")
+    scheduler.add_job(tick, "interval", seconds=_HEARTBEAT_INTERVAL_SECONDS, id="heartbeat")
+    scheduler.add_job(
+        reap_stale_bulk_jobs,
+        "interval",
+        seconds=_REAP_INTERVAL_SECONDS,
+        id="bulk-job-reaper",
+    )
+    # TODO: register further scheduled jobs here
     return scheduler
 
 

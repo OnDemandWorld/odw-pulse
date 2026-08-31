@@ -73,8 +73,8 @@ services:
 
   pulse-worker:
     build:
-      context: ./pulse-worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: pulse-worker/Dockerfile
     environment:
       DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
       REDIS_URL: redis://redis:6379/0
@@ -89,8 +89,8 @@ services:
 
   pulse-scheduler:
     build:
-      context: ./pulse-scheduler
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: pulse-scheduler/Dockerfile
     environment:
       DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
       REDIS_URL: redis://redis:6379/0

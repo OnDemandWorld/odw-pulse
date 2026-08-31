@@ -47,6 +47,6 @@ typecheck:
 
 build:
 	docker build -t ondemandworld/pulse-api:latest pulse-api
-	docker build -t ondemandworld/pulse-worker:latest pulse-worker
-	docker build -t ondemandworld/pulse-scheduler:latest pulse-scheduler
+	docker build -t ondemandworld/pulse-worker:latest -f pulse-worker/Dockerfile .
+	docker build -t ondemandworld/pulse-scheduler:latest -f pulse-scheduler/Dockerfile .
 	docker build -t ondemandworld/pulse-ui:latest pulse-ui

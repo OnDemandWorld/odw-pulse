@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import tempfile
 import uuid
 from pathlib import Path
@@ -23,6 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pulse.api.deps import CurrentUser, get_db
 from pulse.api.schemas.bulk_job import BulkJobConfig, BulkJobList, BulkJobRead
 from pulse.services.bulk_job_service import BulkJobService
+from pulse.worker.dispatch import enqueue_job
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/bulk-jobs", tags=["bulk-jobs"])
 
@@ -99,24 +104,25 @@ async def create_bulk_job(
         input_file=str(file_path),
     )
 
-    # Dispatch to worker (best-effort — falls back to in-process).
-    try:
-        import asyncio
-
-        from pulse.worker.tasks import process_bulk_job
-
+    # Dispatch to the worker stream.  When Redis is unreachable (minimal dev
+    # setups) fall back to processing inside this process.
+    if not await enqueue_job(str(job.id)):
         asyncio.create_task(
-            process_bulk_job(str(job.id)),
+            _run_in_process(str(job.id)),
             name=f"bulk-job-{job.id}",
-        )
-    except Exception:  # pragma: no cover — defensive
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "Could not dispatch job %s to worker", job.id, exc_info=True,
         )
 
     return BulkJobRead.model_validate(job, from_attributes=True)
+
+
+async def _run_in_process(job_id: str) -> None:
+    """Fallback used when the Redis stream is unavailable."""
+    try:
+        from pulse.worker.tasks import process_bulk_job
+
+        await process_bulk_job(job_id)
+    except Exception:
+        logger.exception("In-process bulk job %s failed", job_id)
 
 
 # ---------------------------------------------------------------------------

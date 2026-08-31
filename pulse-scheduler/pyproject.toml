@@ -7,6 +7,10 @@ name = "pulse-scheduler"
 version = "0.1.0"
 description = "Pulse scheduled task runner"
 requires-python = ">=3.11"
+# NOTE: the bulk-job reaper job imports pulse-api helpers at runtime
+# (pulse.worker.maintenance). pulse-api is not on PyPI, so it is installed
+# alongside this package: `pip install ./pulse-api ./pulse-scheduler` in
+# Docker, or `make install` for local development.
 dependencies = [
     "apscheduler>=3.10.0",
     "redis>=5.0.0",
