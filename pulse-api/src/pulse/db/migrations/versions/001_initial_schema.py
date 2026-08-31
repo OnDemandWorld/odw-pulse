@@ -319,6 +319,31 @@ def upgrade() -> None:
     )
 
     op.create_table(
+        "review_annotations",
+        sa.Column("id", sa.Uuid, server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column("content_piece_id", sa.Uuid, nullable=False),
+        sa.Column("user_id", sa.Uuid, nullable=True),
+        sa.Column("action", sa.Text, nullable=False),
+        sa.Column("comment", sa.Text, nullable=True),
+        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.ForeignKeyConstraint(["content_piece_id"], ["content_pieces.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
+        comment="Review annotations and actions on content pieces.",
+    )
+    op.create_index(
+        "ix_review_annotations_content_piece_id",
+        "review_annotations",
+        ["content_piece_id"],
+    )
+
+    op.create_table(
         "brand_voices",
         sa.Column("id", sa.Uuid, server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("workspace_id", sa.Uuid, nullable=False),
@@ -863,11 +888,24 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # 6. Row-Level Security
     # ------------------------------------------------------------------
+    #
+    # Policies compare the row's workspace against the ``pulse.workspace_id``
+    # setting, which the API applies per-transaction with SET LOCAL (see
+    # pulse/db/session.py).  ``current_setting(..., true)`` returns NULL when
+    # the setting is absent, and NULL never matches — deny by default.
+    #
+    # Note: RLS only binds roles that do not own the table.  To actually
+    # enforce these policies the application must connect with a
+    # non-owner role, or the tables need FORCE ROW LEVEL SECURITY.  That
+    # role split is tracked as a production-hardening step (see PLAN.md);
+    # until then these policies are correct but not binding for the owner.
+    _ws = "current_setting('pulse.workspace_id', true)"
 
     workspace_scoped_tables = [
         "users",
         "content_pieces",
         "content_versions",
+        "review_annotations",
         "brand_voices",
         "glossaries",
         "glossary_terms",
@@ -885,56 +923,45 @@ def upgrade() -> None:
     for tbl in workspace_scoped_tables:
         op.execute(f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY")
 
-    # Simple per-table policies.  In production these should reference
-    # ``current_setting('app.current_workspace_id')`` (or the JWT claim
-    # helper) so that each session is scoped to exactly one workspace.
-    # The policies below are placeholders — they enable RLS enforcement
-    # without blocking application bootstrapping.
+    def _direct_policy(table: str) -> str:
+        """Policy for tables that carry their own workspace_id column."""
+        return (
+            f"CREATE POLICY {table}_workspace_isolation ON {table} "
+            f"FOR ALL USING (workspace_id::text = {_ws}) "
+            f"WITH CHECK (workspace_id::text = {_ws})"
+        )
+
+    def _parent_policy(table: str, parent: str, fk_column: str) -> str:
+        """Policy for child tables scoped through a parent's workspace_id."""
+        exists = (
+            f"EXISTS (SELECT 1 FROM {parent} parent "
+            f"WHERE parent.id = {table}.{fk_column} "
+            f"AND parent.workspace_id::text = {_ws})"
+        )
+        return (
+            f"CREATE POLICY {table}_workspace_isolation ON {table} "
+            f"FOR ALL USING ({exists}) WITH CHECK ({exists})"
+        )
+
     _policy_ddl = [
-        # users
-        "CREATE POLICY users_workspace_isolation ON users FOR ALL USING (true) WITH CHECK (true)",
-        # content_pieces
-        "CREATE POLICY content_pieces_workspace_isolation ON content_pieces "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # content_versions — inherit via FK to content_pieces
-        "CREATE POLICY content_versions_workspace_isolation ON content_versions "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # brand_voices
-        "CREATE POLICY brand_voices_workspace_isolation ON brand_voices "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # glossaries
-        "CREATE POLICY glossaries_workspace_isolation ON glossaries "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # glossary_terms — inherit via FK to glossaries
-        "CREATE POLICY glossary_terms_workspace_isolation ON glossary_terms "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # bulk_jobs
-        "CREATE POLICY bulk_jobs_workspace_isolation ON bulk_jobs "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # audit_logs
-        "CREATE POLICY audit_logs_workspace_isolation ON audit_logs "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # api_keys
-        "CREATE POLICY api_keys_workspace_isolation ON api_keys "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # webhook_configs
-        "CREATE POLICY webhook_configs_workspace_isolation ON webhook_configs "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # experiments
-        "CREATE POLICY experiments_workspace_isolation ON experiments "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # experiment_variants — inherit via FK to experiments
-        "CREATE POLICY experiment_variants_workspace_isolation ON experiment_variants "
-        "FOR ALL USING (true) WITH CHECK (true)",
-        # experiment_assignments — inherit via FK to experiments
-        "CREATE POLICY experiment_assignments_workspace_isolation "
-        "ON experiment_assignments FOR ALL USING (true) WITH CHECK (true)",
-        # experiment_exposures — inherit via FK to experiments
-        "CREATE POLICY experiment_exposures_workspace_isolation "
-        "ON experiment_exposures FOR ALL USING (true) WITH CHECK (true)",
-        # prompt_versions
-        "CREATE POLICY prompt_versions_workspace_isolation ON prompt_versions "
-        "FOR ALL USING (true) WITH CHECK (true)",
+        # Tables with their own workspace_id column.
+        _direct_policy("users"),
+        _direct_policy("content_pieces"),
+        _direct_policy("brand_voices"),
+        _direct_policy("glossaries"),
+        _direct_policy("bulk_jobs"),
+        _direct_policy("audit_logs"),
+        _direct_policy("api_keys"),
+        _direct_policy("webhook_configs"),
+        _direct_policy("experiments"),
+        _direct_policy("prompt_versions"),
+        # Child tables scoped via their parent.
+        _parent_policy("content_versions", "content_pieces", "content_piece_id"),
+        _parent_policy("review_annotations", "content_pieces", "content_piece_id"),
+        _parent_policy("glossary_terms", "glossaries", "glossary_id"),
+        _parent_policy("experiment_variants", "experiments", "experiment_id"),
+        _parent_policy("experiment_assignments", "experiments", "experiment_id"),
+        _parent_policy("experiment_exposures", "experiments", "experiment_id"),
     ]
     for ddl in _policy_ddl:
         op.execute(ddl)
@@ -951,6 +978,7 @@ def downgrade() -> None:
         "users_workspace_isolation",
         "content_pieces_workspace_isolation",
         "content_versions_workspace_isolation",
+        "review_annotations_workspace_isolation",
         "brand_voices_workspace_isolation",
         "glossaries_workspace_isolation",
         "glossary_terms_workspace_isolation",
@@ -969,6 +997,7 @@ def downgrade() -> None:
             "users",
             "content_pieces",
             "content_versions",
+            "review_annotations",
             "brand_voices",
             "glossaries",
             "glossary_terms",
@@ -1013,6 +1042,7 @@ def downgrade() -> None:
         "glossary_terms",
         "glossaries",
         "brand_voices",
+        "review_annotations",
         "content_versions",
         "content_pieces",
         "generation_cache",
