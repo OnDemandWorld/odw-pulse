@@ -50,6 +50,11 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
+      # Pre-auth (login/register) lookups run on this privileged connection;
+      # empty falls back to DATABASE_URL (the env_file below passes it through
+      # when set). Point it at a dedicated admin role once RLS is enforced:
+      # DATABASE_ADMIN_URL: postgresql+asyncpg://pulse_admin:...@postgres:5432/pulse
+      DATABASE_ADMIN_URL: ${DATABASE_ADMIN_URL:-}
       REDIS_URL: redis://redis:6379/0
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_ACCESS_KEY: minioadmin

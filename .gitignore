@@ -45,3 +45,9 @@ logs/
 *.tmp
 *.temp
 .cache/
+
+# Test artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/

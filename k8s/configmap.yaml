@@ -14,8 +14,13 @@ data:
   PULSE_API_PORT: "8000"
   JWT_ALGORITHM: "HS256"
   JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_LOGIN_PER_MINUTE: "5"
+  RATE_LIMIT_REGISTER_PER_MINUTE: "3"
   DATABASE_POOL_SIZE: "10"
   DATABASE_MAX_OVERFLOW: "20"
+  # DATABASE_ADMIN_URL (pre-auth privileged DB connection) is a credential —
+  # set it in pulse-secrets, not here. Empty/unset falls back to DATABASE_URL.
   STORAGE_BUCKET: "pulse"
   STORAGE_REGION: "us-east-1"
   STORAGE_USE_SSL: "true"
