@@ -27,9 +27,11 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     // On 401, drop the token and send the user to the login page — except
-    // when the failing request *was* the login attempt (avoid redirect loop).
+    // for the auth endpoints that own their own error UX (login attempts,
+    // and logout, where the SPA transitions itself regardless).
     const url: string = error.config?.url ?? '';
-    if (error.response?.status === 401 && !url.includes('/auth/login')) {
+    const selfHandled = url.includes('/auth/login') || url.includes('/auth/logout');
+    if (error.response?.status === 401 && !selfHandled) {
       localStorage.removeItem('pulse_token');
       window.location.href = '/login';
     }

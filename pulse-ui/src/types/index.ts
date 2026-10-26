@@ -9,6 +9,14 @@
 export interface TokenResponse {
   access_token: string;
   token_type: string;
+  workspace_id?: string | null;
+  email?: string | null;
+}
+
+export interface RegisterRequest {
+  workspace_name: string;
+  email: string;
+  password: string;
 }
 
 export interface UserProfile {

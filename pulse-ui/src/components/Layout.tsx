@@ -15,9 +15,17 @@ export default function Layout() {
     queryFn: fetchMe,
   });
 
-  const handleLogout = () => {
-    localStorage.removeItem('pulse_token');
-    navigate('/login', { replace: true });
+  const handleLogout = async () => {
+    try {
+      // Revoke server-side too, so the token dies with the session.
+      await apiClient.post('/auth/logout');
+    } catch {
+      // Best-effort: fall through to local sign-out even if the API rejects
+      // or is unreachable.
+    } finally {
+      localStorage.removeItem('pulse_token');
+      navigate('/login', { replace: true });
+    }
   };
 
   return (
