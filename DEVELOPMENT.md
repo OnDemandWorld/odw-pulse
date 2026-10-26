@@ -6,7 +6,7 @@
 
 **Started:** 2026-06-24
 **Completed:** 2026-06-24
-**Last review pass:** 2026-08-31 (full review) / 2026-09-01 (Phase 0 + Phase 1: CI, SSRF guard, durable bulk-job pipeline)
+**Last review pass:** 2026-08-31 (full review) / 2026-09-01 (Phase 0 + Phase 1: CI, SSRF guard, durable bulk-job pipeline) / 2026-10-27 (audit Critical band: frontend registration flow, `DATABASE_ADMIN_URL` propagation, auth rate limiting, server-side JWT revocation)
 
 ---
 
@@ -66,9 +66,9 @@ make typecheck
 
 | Check | Command | Result |
 |---|---|---|
-| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 89 passed (~17s) |
-| Backend lint | `cd pulse-api && ruff check src tests` | ✅ 0 issues (93 files) |
-| Backend typecheck | `cd pulse-api && mypy src` | ✅ 0 issues (93 files) |
+| Backend tests | `cd pulse-api && pytest tests -v` | ✅ 98 passed (~21s) |
+| Backend lint | `cd pulse-api && ruff check src tests` | ✅ 0 issues (97+12 files) |
+| Backend typecheck | `cd pulse-api && mypy src` | ✅ 0 issues (97 files) |
 | Frontend typecheck | `cd pulse-ui && npx tsc --noEmit` | ✅ 0 errors |
 | Frontend build | `cd pulse-ui && npm run build` | ✅ 147 modules, <1s |
 | Frontend lint | `cd pulse-ui && npm run lint` | ✅ 0 warnings (ESLint config added 2026-08-31) |
@@ -116,10 +116,10 @@ These are known issues that should be addressed before production use.
 2. ~~**k8s ConfigMap missing**~~ ✅ Added `k8s/configmap.yaml`; Secret keys renamed to match the env vars the app reads.
 3. **Analytics connectors are stubs** — GA4/Mixpanel/Segment connectors log calls but don't actually send data to external services.
 4. **Vault connector is a mock** — Returns canned responses, doesn't call real Vault API.
-5. **No rate limiting** — No per-tenant or per-IP rate limiting on API endpoints.
+5. 🔶 **Rate limiting** — Per-IP fixed-window throttles now guard `/auth/login` and `/auth/register` (429 + `Retry-After`, Redis-backed with in-process fallback; 2026-10-27). Per-tenant limits for `/generate` and bulk endpoints still missing.
 6. **Secrets management** — k8s secrets are in YAML files; should use sealed-secrets or external secret manager.
 7. **RLS not yet binding** — Real per-workspace RLS policies and the `SET LOCAL pulse.workspace_id` hook are implemented, but the app connects as the table *owner*, so PostgreSQL does not enforce the policies until a dedicated non-owner DB role is introduced (or `FORCE ROW LEVEL SECURITY` is enabled). Service-layer workspace filtering remains the actual isolation boundary.
-8. **Auth is a mock** — `/auth/login` validates against a hardcoded test user; there is no user management, registration, or real workspace membership (impersonation checks only that the target workspace exists).
+8. ~~**Auth is a mock**~~ ✅ Real user store (2026-09-01, commit 1a0f1d4): registration creates workspace + owner, login verifies bcrypt hashes, admin/owner can invite/deactivate users, and the frontend has a *Create workspace* flow. 2026-10-27 added server-side logout (`jti` blocklist via `/auth/logout` + `/auth/logout-everywhere`). Remaining: cross-workspace membership (impersonation checks existence only) and refresh tokens.
 
 ### High Priority
 9. ~~**Worker/scheduler launch inconsistency**~~ ✅ `make install` installs all three packages into one venv; `make worker` / `make scheduler` work. The standalone worker is now a real Redis Streams consumer with ack/retry/dead-lettering (2026-09-01, see PLAN.md).
@@ -156,7 +156,7 @@ Prioritized roadmap for next iteration:
 ### Phase 1: Production Readiness (1-2 weeks)
 - [x] **GitHub Actions CI/CD** — test, lint, typecheck, build (deploy to staging still open)
 - [x] **k8s ConfigMap** — `k8s/configmap.yaml` added in the 2026-08-31 review pass
-- [ ] **Rate limiting** — Add per-tenant rate limits (e.g., 100 req/min for API, 10 bulk jobs/hour)
+- [x] **Rate limiting** — per-IP on `/auth/login` + `/auth/register` (2026-10-27); per-tenant limits for `/generate`/bulk still open
 - [x] **Request validation** — CSV uploads capped at 5 MiB (2026-08-31); request timeout (30s) and production CORS allowlist still open
 - [ ] **Database backups** — Automated daily backups to S3 with 30-day retention
 - [ ] **Secrets management** — Use sealed-secrets or AWS Secrets Manager / Vault

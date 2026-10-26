@@ -6,7 +6,7 @@ This file provides guidance to AI coding agents (Claude Code, Copilot, etc.) whe
 
 **This is a fully implemented codebase.** All 10 checkpoints from the planning phase are complete, a full review/refactor pass landed on 2026-08-31, and Phase 0 + Phase 1 of the roadmap (CI, SSRF guard, durable bulk-job pipeline) landed on 2026-09-01 — see `PLAN.md`. The backend API, frontend SPA, worker, scheduler, and deployment artifacts are all implemented with passing tests and clean lint/type checks.
 
-- **Backend:** 94 Python source files, 89 tests passing
+- **Backend:** 97 Python source files, 98 tests passing
 - **Frontend:** 18 TypeScript/React files, clean typecheck, lint, and build
 - **Deployment:** Docker Compose (7 services) + Kubernetes manifests (10 YAML files)
 - **CI:** GitHub Actions runs backend tests/lint/types, frontend checks, manifest validation, and image builds on every push/PR
@@ -32,7 +32,7 @@ odw-pulse/
 │   │   ├── quality/      # Heuristic quality scoring engine
 │   │   ├── services/     # Business logic layer
 │   │   └── worker/       # Redis Streams pipeline (consumer helpers, dispatch, maintenance)
-│   └── tests/            # 89 tests across 11 files
+│   └── tests/            # 98 tests across 12 files
 ├── pulse-ui/             # React 18 + TypeScript + Vite SPA
 │   └── src/
 │       ├── api/          # Axios HTTP client
@@ -116,7 +116,7 @@ make build                      # Build all Docker images
 # Backend (from pulse-api/)
 source .venv/bin/activate
 uvicorn pulse.main:app --reload --port 8000   # Run API
-pytest tests -v                                # 89 tests, ~17s
+pytest tests -v                                # 98 tests, ~21s
 ruff check src tests                           # Lint (90 files)
 mypy src                                       # Type check strict (90 files)
 
@@ -168,10 +168,10 @@ See `DEVELOPMENT.md` for the full list and `PLAN.md` for the review report & roa
 
 1. ~~**No CI/CD**~~ ✅ GitHub Actions workflow (`.github/workflows/ci.yml`).
 2. **RLS not yet binding** — Real workspace policies + `SET LOCAL pulse.workspace_id` hook exist, but the app connects as table owner; a dedicated non-owner DB role (or `FORCE ROW LEVEL SECURITY`) is needed for actual enforcement. Service-layer workspace filtering is the current isolation boundary.
-3. **Auth is a mock** — Login validates a hardcoded dev user; no user management or workspace membership model (impersonation only checks the target workspace exists).
+3. ~~**Auth is a mock**~~ ✅ Real user store since 2026-09-01: `POST /auth/register` (workspace + owner), bcrypt-verified login, admin/owner user management, role gating, and — since 2026-10-27 — server-side token revocation (`jti` claim, `POST /auth/logout`, `POST /auth/logout-everywhere`). Cross-workspace membership still pending (impersonation only checks the target workspace exists).
 4. **Analytics connectors are stubs** — GA4/Mixpanel/Segment log calls but don't send data.
 5. **Vault connector is a mock** — Returns canned responses, doesn't call real API.
-6. **No rate limiting** — No per-tenant or per-IP limits.
+6. 🔶 **Rate limiting** — Per-IP fixed-window throttles on `/auth/login`/`/auth/register` (`pulse/api/ratelimit.py`, Redis + in-process fallback, `RATE_LIMIT_*` config). Per-tenant limits for `/generate`/bulk still open.
 7. ~~**Standalone worker is a stub**~~ ✅ `pulse-worker` consumes the Redis stream (ack/retry/dead-letter); in-process fallback only when Redis is down. Live docker/k8s smoke test still pending.
 8. **No E2E tests** — Only unit/integration tests via pytest.
 9. **Heuristic quality scoring** — No LLM-based evaluation.
@@ -211,9 +211,10 @@ See `DEVELOPMENT.md` §Future Improvements for the full roadmap. Key areas:
 
 See `.env.example` for the complete template (30+ variables). Key categories:
 - **Application:** `PULSE_ENV`, `PULSE_SECRET_KEY`, `PULSE_DEBUG`, `PULSE_LOG_LEVEL`
-- **Database:** `DATABASE_URL`, `DATABASE_POOL_SIZE`, `DATABASE_MAX_OVERFLOW`
+- **Database:** `DATABASE_URL`, `DATABASE_ADMIN_URL` (privileged pre-auth connection; falls back to `DATABASE_URL` when empty), `DATABASE_POOL_SIZE`, `DATABASE_MAX_OVERFLOW`
 - **Redis:** `REDIS_URL`
 - **JWT:** `JWT_ALGORITHM`, `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
+- **Rate limiting:** `RATE_LIMIT_ENABLED`, `RATE_LIMIT_LOGIN_PER_MINUTE`, `RATE_LIMIT_REGISTER_PER_MINUTE`
 - **LLM:** `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `OLLAMA_BASE_URL`, `VLLM_BASE_URL`
 - **Storage:** `STORAGE_ENDPOINT`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `STORAGE_BUCKET`
 - **Vault:** `VAULT_API_URL`, `VAULT_API_KEY`

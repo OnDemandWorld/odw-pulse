@@ -164,13 +164,13 @@ The bulk-job path is now durable and out-of-process:
 
 ### Phase 2 — Real identity & enforceable tenancy (1–2 weeks)
 The security skeleton is now correct; it needs a body:
-1. **User management** — users table CRUD + registration/invite, real `POST /auth/login` against it (the mock user store in `api/v1/auth.py` is explicitly marked), refresh tokens or short-lived access + rotation.
-2. **Workspace membership & roles** — membership table, enforce on impersonation (currently existence-only) and on `require_workspace`.
-3. **Dedicated DB role for RLS** — migration creates `pulse_app` role (non-owner), app connects as it (or `FORCE ROW LEVEL SECURITY` + careful worker context-setting); then the Phase-0-correct policies actually bind. Add integration tests against real PostgreSQL (testcontainers or a CI service container) covering cross-workspace denial.
+1. 🔶 **User management** — ✅ registration, real `POST /auth/login`, user CRUD + roles (commit 1a0f1d4, 2026-09-01). ✅ frontend registration flow (`Login.tsx` *Create workspace* tab, BUILD_REPORT C-1, 2026-10-27). ✅ server-side token revocation — `jti` claim, `/auth/logout`, `/auth/logout-everywhere` (C-4, 2026-10-27). Still open: refresh tokens / rotation.
+2. 🔶 **Workspace membership & roles** — role gating (owner/admin/editor/viewer) enforced on the user-management and impersonate endpoints. Cross-workspace membership table still open.
+3. **Dedicated DB role for RLS** — migration creates `pulse_app` role (non-owner), app connects as it (or `FORCE ROW LEVEL SECURITY` + careful worker context-setting); then the Phase-0-correct policies actually bind. Add integration tests against real PostgreSQL (testcontainers or a CI service container) covering cross-workspace denial. 🔶 *Prereq landed:* `DATABASE_ADMIN_URL` now propagates through all deployment artifacts (C-2, 2026-10-27); pre-auth paths already run on it.
 4. **httpOnly cookie sessions** (optional but recommended) — removes the XSS-exfiltratable JWT from localStorage.
 
 ### Phase 3 — Production hardening (1 week, parallelizable)
-1. **Rate limiting** — per-tenant + per-IP (e.g. `slowapi` or a Redis token-bucket middleware); most urgent for `/generate` (cost) and `/auth/login` (brute force).
+1. 🔶 **Rate limiting** — ✅ per-IP fixed-window throttle on `/auth/login` (5/min) and `/auth/register` (3/min), Redis-backed with in-process fallback, 429 + `Retry-After` (C-3, 2026-10-27; dependency-free rather than `slowapi`). Still open: per-tenant limits for `/generate` (cost) and bulk endpoints.
 2. **Webhook test SSRF** — `POST /webhooks/{id}/test` will currently fetch any URL the user supplies (cloud metadata, internal services). Add scheme/host validation with a private-range blocklist and https-only in production. **Highest-severity item left open from the review.**
 3. **Request hygiene** — global timeouts, production CORS allowlist from config, structured RFC-7807 error bodies, request-id propagation.
 4. **Webhook retries** — exponential backoff (3 attempts), delivery log table, dead-letter visibility in Settings.

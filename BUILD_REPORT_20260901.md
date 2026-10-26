@@ -90,9 +90,13 @@ Per-module highlights:
 
 All tasks are ordered within their severity band by descending impact. Each task is actionable within the scope of the current codebase without external system changes unless noted.
 
+> **Remediation status (2026-10-27):** the entire Critical band — C-1, C-2, C-3, C-4 — is implemented and committed; per-item status notes below. Deferred within these items: the Playwright E2E from C-1 (lands with A.1), and the dedicated `pulse_admin` role bootstrap from C-2 (lands with H-1, needs a real PostgreSQL). Backend suite is now 98 tests, all checks clean.
+
 ### Critical (fix within 1 week)
 
-**C-1. Frontend registration flow.**
+**C-1. Frontend registration flow.** ✅ *Done 2026-10-27.* `Login.tsx` gained a **Sign in / Create workspace** tab wired to `POST /auth/register`; the mock-credential hint is gone, and `TokenResponse` now mirrors the backend (`workspace_id`, `email`). Typecheck/lint/build clean. Playwright E2E of the loop → still open (A.1).
+
+
 The UI currently references a hardcoded mock user (`test@example.com / testpassword`) in `pulse-ui/src/pages/Login.tsx:87-89`, and there is no UI path to `POST /api/v1/auth/register`. First-time users cannot onboard.
 **Remediation:**
 - Remove mock-credential hint from `Login.tsx`.
@@ -101,7 +105,9 @@ The UI currently references a hardcoded mock user (`test@example.com / testpassw
 - Update the `Login` and `Register` TypeScript types in `pulse-ui/src/types/index.ts` to reflect `TokenResponse` (which now returns `workspace_id` and `email`).
 - Add Playwright E2E test for the full register → login → authenticated-flow loop.
 
-**C-2. Propagate `DATABASE_ADMIN_URL` through all deployment artifacts.**
+**C-2. Propagate `DATABASE_ADMIN_URL` through all deployment artifacts.** ✅ *Done 2026-10-27.* Added to `.env.example` (documented, empty = falls back to `DATABASE_URL`), `docker-compose.yml` (`${DATABASE_ADMIN_URL:-}` passthrough), and `k8s/secrets.example.yaml` + `pulse-config` comment. The privileged `pulse_admin` role bootstrap itself ships with H-1 as planned.
+
+
 Currently defined only in `pulse-api/src/pulse/config.py:33`. Without it, the pre-auth paths (login, register) use the scoped role, which will be denied under actual RLS enforcement.
 **Remediation:**
 - Add `DATABASE_ADMIN_URL` to `.env.example` with comment explaining its purpose (privileged pre-auth connection; typically points to a `BYPASSRLS` role).
@@ -109,7 +115,9 @@ Currently defined only in `pulse-api/src/pulse/config.py:33`. Without it, the pr
 - Add `POSTGRES_ADMIN_PASSWORD` to `k8s/secrets.example.yaml`. Reference it in `k8s/pulse-api.yaml` via `$(POSTGRES_ADMIN_PASSWORD)` and set `DATABASE_ADMIN_URL` accordingly.
 - Create the admin role in the Postgres init script (to be added in C-7).
 
-**C-3. Rate-limit authentication endpoints.**
+**C-3. Rate-limit authentication endpoints.** ✅ *Done 2026-10-27.* Fixed-window per-IP limiter in `pulse/api/ratelimit.py` applied to `/auth/login` (5/min) and `/auth/register` (3/min) — env-tunable via `RATE_LIMIT_*`, `RATE_LIMIT_ENABLED=false` to disable. No `slowapi` dependency: counters live in Redis (`pulse/core/redis_kv.py`) with an in-process fallback so the auth path survives Redis outages, mirroring job dispatch. 429 carries `Retry-After`; covered by `tests/test_auth_hardening.py`.
+
+
 `/auth/login` and `/auth/register` are unthrottled. A single attacker can brute-force passwords or enumerate accounts.
 **Remediation:**
 - Add `slowapi` (or equivalent) as a dependency.
@@ -118,7 +126,9 @@ Currently defined only in `pulse-api/src/pulse/config.py:33`. Without it, the pr
 - Return `429 Too Many Requests` with `Retry-After` header on throttle.
 - Add tests that assert 429 on burst attempts.
 
-**C-4. Implement JWT revocation / logout.**
+**C-4. Implement JWT revocation / logout.** ✅ *Done 2026-10-27.* Tokens now carry a `jti` claim; `POST /auth/logout` blocklists the presented token until its natural expiry, and `POST /auth/logout-everywhere` stores a per-user `iat` cutoff. `get_current_user` rejects revoked tokens before any DB work (`401 Token has been revoked`). The SPA's Log out button calls `/auth/logout` first. State on the same Redis-with-fallback store as C-3. (Chose `iat` cutoffs over a `revoked_before` ZSET variant — same semantics, one key per user.)
+
+
 Compromised tokens currently work until expiry. There is no server-side logout.
 **Remediation:**
 - Add `POST /auth/logout` that stores the token's `jti` in a Redis set with TTL = remaining token lifetime.
@@ -344,8 +354,8 @@ API is at `/api/v1/*` but there's no mechanism to evolve the schema without brea
 | Password storage | ✅ bcrypt | Via `passlib` (note: evaluate migration to direct `bcrypt` per C.6) |
 | JWT signing | ✅ HS256 | Configurable algorithm; recommend RS256 migration |
 | JWT expiry | ✅ 30 min | Configurable; consider 15 min + refresh token |
-| JWT revocation | ❌ Not implemented | See C-4 |
-| Rate limiting | ❌ Not implemented | See C-3 |
+| JWT revocation | ✅ Implemented | C-4 landed 2026-10-27: `jti` + `/auth/logout` + `/auth/logout-everywhere` |
+| Rate limiting | ✅ Implemented | C-3 landed 2026-10-27: login/register per-IP windows (Redis + fallback) |
 | SSRF protection (webhooks) | ⚠️ Partial | DNS rebinding gap; see H-5 |
 | RLS enforcement | ⚠️ Inert | Policies exist but superuser bypass; see H-1 |
 | CORS | ⚠️ Permissive in dev | See H-7 |

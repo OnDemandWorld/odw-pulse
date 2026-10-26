@@ -104,7 +104,7 @@ make dev
 
 This starts: PostgreSQL, Redis, MinIO, pulse-api, pulse-worker, pulse-scheduler, pulse-ui.
 
-The UI is served at `http://localhost:5173`. Sign in with the development mock user: `test@example.com` / `testpassword` (see `pulse-api/src/pulse/api/v1/auth.py` — real user management is on the roadmap).
+The UI is served at `http://localhost:5173`. There is no seeded user: on first visit use the **Create workspace** tab on the login page (`POST /auth/register`) to create your workspace and owner account, then sign in. Additional teammates are invited from `POST /auth/users` (admin/owner). Login and registration are rate-limited per client IP (`RATE_LIMIT_LOGIN_PER_MINUTE` / `RATE_LIMIT_REGISTER_PER_MINUTE`).
 
 ### Individual Services
 
@@ -203,7 +203,7 @@ All endpoints are under `/api/v1/`:
 
 | Router | Key Endpoints |
 |---|---|
-| `auth` | `POST /auth/login`, `GET /auth/me`, `POST /auth/impersonate` |
+| `auth` | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `POST /auth/logout-everywhere`, `GET /auth/me`, `GET/POST /auth/users`, `POST /auth/users/:id/deactivate`, `POST /auth/impersonate` |
 | `generate` | `POST /generate`, `POST /generate/stream` (SSE stub) |
 | `content` | `GET/POST /content`, `GET/PUT/DELETE /content/:id`, `POST /:id/submit|approve|reject|request-changes`, `GET /:id/versions`, `GET /:id/export` |
 | `bulk_jobs` | `POST /bulk-jobs` (CSV upload), `GET /bulk-jobs/:id`, `POST /:id/pause|resume|cancel`, `GET /:id/download` |
