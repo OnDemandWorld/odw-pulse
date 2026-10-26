@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextvars
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
@@ -22,6 +23,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.auth.models import UserInToken
+from pulse.auth.revocation import is_token_revoked, is_token_revoked_by_logout_all
 from pulse.auth.security import JWTError, decode_access_token
 from pulse.db.session import get_session as get_db
 
@@ -71,6 +73,20 @@ class WorkspaceContext:
 # this module only publishes the workspace via ``WorkspaceContext``.
 
 
+def _claim_timestamp(value: object) -> int | None:
+    """Normalize a JWT ``iat``/``exp`` claim to unix seconds.
+
+    ``python-jose`` decodes these claims as ``datetime`` objects; other
+    producers may leave them as ints.  Returns *None* for absent or
+    malformed claims.
+    """
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
@@ -82,9 +98,12 @@ async def get_current_user(
 ) -> UserInToken:
     """Validate the JWT bearer token and return the user identity.
 
-    The user record is looked up in the database to ensure it still exists
-    and is active.  Only when the ``users`` table itself is missing (fresh
-    unmigrated installation) do the token claims pass unvalidated.
+    The token is checked against the server-side revocation store first
+    (``jti`` blocklist and per-user ``logout-everywhere`` cutoff — see
+    :mod:`pulse.auth.revocation`).  The user record is then looked up in
+    the database to ensure it still exists and is active.  Only when the
+    ``users`` table itself is missing (fresh unmigrated installation) do
+    the token claims pass unvalidated.
     """
     if token is None:
         raise HTTPException(
@@ -105,6 +124,22 @@ async def get_current_user(
     workspace_id = uuid.UUID(str(payload["workspace_id"]))
     email = str(payload["email"])
     role = str(payload["role"])
+    jti_raw = payload.get("jti")
+    jti = str(jti_raw) if jti_raw is not None else None
+    issued_at = _claim_timestamp(payload.get("iat"))
+    expires_at = _claim_timestamp(payload.get("exp"))
+
+    # Server-side revocation (C-4): a logged-out token, or anything issued
+    # before a logout-everywhere, is dead regardless of its signature/expiry.
+    revoked = (jti is not None and await is_token_revoked(jti)) or await is_token_revoked_by_logout_all(
+        user_id, issued_at
+    )
+    if revoked:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # Publish the workspace scope for the DB layer (RLS SET LOCAL hook).
     WorkspaceContext.set(workspace_id)
@@ -150,6 +185,9 @@ async def get_current_user(
         email=email,
         workspace_id=workspace_id,
         role=role,
+        jti=jti,
+        iat=issued_at,
+        exp=expires_at,
     )
 
 

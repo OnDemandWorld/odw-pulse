@@ -19,6 +19,11 @@ class UserInToken(BaseModel):
     email: str
     workspace_id: uuid.UUID
     role: str
+    # Claims needed for server-side revocation (``POST /auth/logout``);
+    # ``None`` for legacy tokens minted before the ``jti`` claim existed.
+    jti: str | None = None
+    iat: int | None = None
+    exp: int | None = None
 
 
 class TokenPayload(BaseModel):
@@ -30,6 +35,7 @@ class TokenPayload(BaseModel):
     role: str
     exp: datetime
     iat: datetime
+    jti: str | None = None
 
 
 class TokenResponse(BaseModel):

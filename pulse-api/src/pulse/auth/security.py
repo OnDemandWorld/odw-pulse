@@ -85,6 +85,9 @@ def create_access_token(
         "role": role,
         "exp": expire,
         "iat": now,
+        # Unique token id — lets /auth/logout blocklist this one token
+        # server-side (see pulse.auth.revocation).
+        "jti": str(uuid.uuid4()),
     }
     return str(jwt.encode(payload, settings.pulse_secret_key, algorithm=settings.jwt_algorithm))
 

@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
 
+    # Rate limiting (per client IP, fixed 60-second windows).  Limits are
+    # attempts *per minute*; 0 disables the corresponding limiter, and
+    # RATE_LIMIT_ENABLED=false turns the feature off entirely.
+    rate_limit_enabled: bool = True
+    rate_limit_login_per_minute: int = 5
+    rate_limit_register_per_minute: int = 3
+
     # Storage
     storage_endpoint: str | None = None
     storage_access_key: str | None = None

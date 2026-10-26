@@ -2,6 +2,8 @@
 
 * ``POST /auth/register``           — create a workspace + owner account
 * ``POST /auth/login``              — exchange credentials for a JWT
+* ``POST /auth/logout``             — revoke the presented token server-side
+* ``POST /auth/logout-everywhere``  — revoke all tokens issued to the user
 * ``GET  /auth/me``                 — return the current user's identity
 * ``GET  /auth/users``              — list users in the caller's workspace
 * ``POST /auth/users``              — invite a user to the caller's workspace
@@ -24,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.deps import CurrentUser, get_db
+from pulse.api.ratelimit import LoginRateLimit, RegisterRateLimit
 from pulse.auth.models import (
     ImpersonateRequest,
     LoginRequest,
@@ -31,6 +34,11 @@ from pulse.auth.models import (
     TokenResponse,
     UserCreate,
     UserRead,
+)
+from pulse.auth.revocation import (
+    remaining_token_ttl,
+    revoke_all_tokens,
+    revoke_token,
 )
 from pulse.auth.security import create_access_token, hash_password, verify_password
 from pulse.db.session import get_admin_session
@@ -77,9 +85,13 @@ def _to_user_read(user: User) -> UserRead:
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     body: RegisterRequest,
+    _rate_limit: RegisterRateLimit,
     db: AsyncSession = Depends(get_admin_session),
 ) -> TokenResponse:
-    """Create a new workspace and its owner account, returning a JWT."""
+    """Create a new workspace and its owner account, returning a JWT.
+
+    Throttled per client IP (``RATE_LIMIT_REGISTER_PER_MINUTE``).
+    """
     email = body.email.strip().lower()
 
     result = await db.execute(select(User.id).where(User.email == email))
@@ -128,9 +140,14 @@ async def register(
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
+    _rate_limit: LoginRateLimit,
     db: AsyncSession = Depends(get_admin_session),
 ) -> TokenResponse:
-    """Authenticate with email/password and receive a JWT access token."""
+    """Authenticate with email/password and receive a JWT access token.
+
+    Throttled per client IP (``RATE_LIMIT_LOGIN_PER_MINUTE``) to blunt
+    brute-force and account-enumeration attempts.
+    """
     email = body.username.strip().lower()
 
     result = await db.execute(select(User).where(User.email == email))
@@ -157,6 +174,38 @@ async def login(
         role=user.role.value,
     )
     return TokenResponse(access_token=token, workspace_id=user.workspace_id, email=user.email)
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/logout & /auth/logout-everywhere
+# ---------------------------------------------------------------------------
+
+
+@router.post("/logout", response_model=dict[str, str])
+async def logout(current_user: CurrentUser) -> dict[str, str]:
+    """Revoke the presented token server-side.
+
+    The token's ``jti`` is blocklisted until it would have expired, so a
+    leaked token stops working immediately — not just in the browser that
+    clicked "log out".  Legacy tokens without a ``jti`` are a no-op (they
+    remain valid until ``exp``, as before).
+    """
+    if current_user.jti is not None:
+        await revoke_token(current_user.jti, remaining_token_ttl(current_user.exp))
+    return {"status": "logged_out"}
+
+
+@router.post("/logout-everywhere", response_model=dict[str, str])
+async def logout_everywhere(current_user: CurrentUser) -> dict[str, str]:
+    """Revoke every token issued to this user up to now (all sessions).
+
+    Suitable for "sign out everywhere" / password-change flows.  Tokens
+    minted within the same wall-clock second as the call are also
+    rejected (second-granular ``iat``), so the client should re-authenticate
+    right after, not reuse the current token.
+    """
+    await revoke_all_tokens(current_user.user_id)
+    return {"status": "logged_out_everywhere"}
 
 
 # ---------------------------------------------------------------------------

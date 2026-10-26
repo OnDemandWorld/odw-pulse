@@ -73,6 +73,27 @@ from pulse.models.webhook_config import WebhookConfig  # noqa: E402, F401
 from pulse.models.workspace import Workspace  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
+# Auth KV store isolation (rate limiting / token revocation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_kv_store() -> Any:
+    """Pin the shared KV store to its in-process fallback between tests.
+
+    Without this, counters/revocation markers would accumulate against a
+    developer's running Redis and leak across test boundaries.
+    """
+    from pulse.core.redis_kv import get_kv_store
+
+    store = get_kv_store()
+    store.use_local_only()
+    store.reset_local_state()
+    yield
+    store.reset_local_state()
+
+
+# ---------------------------------------------------------------------------
 # Event-loop fixture for pytest-asyncio
 # ---------------------------------------------------------------------------
 
