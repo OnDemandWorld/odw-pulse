@@ -15,6 +15,7 @@ Set ``PULSE_METRICS_PORT`` to expose Prometheus counters on that port.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
 import socket
@@ -45,11 +46,15 @@ _CLAIM_EVERY_CYCLES = 6
 # ---------------------------------------------------------------------------
 
 
-async def process_job(job_id: str) -> None:
-    """Run one bulk job through the generation pipeline."""
+async def process_job(job_id: str) -> str:
+    """Run one bulk job through the generation pipeline.
+
+    Returns ``"processed"``/``"terminal"`` (safe to ack) or ``"active"``
+    (another consumer owns the job — must not ack).
+    """
     from pulse.worker.tasks import process_bulk_job
 
-    await process_bulk_job(job_id)
+    return await process_bulk_job(job_id)
 
 
 async def mark_job_failed(job_id: str, reason: str) -> None:
@@ -216,8 +221,11 @@ class Worker:
             JOBS_TOTAL.labels(result="dead_letter").inc()
             return True
 
+        # Heartbeat the PEL entry while processing so another replica's
+        # XAUTOCLAIM cannot steal this in-flight message (audit finding #9).
+        keep_alive = asyncio.create_task(self._extend_claim_loop(message_id))
         try:
-            await process_job(job_id)
+            outcome = await process_job(job_id)
         except Exception as exc:
             logger.error(
                 "pulse-worker.job_error",
@@ -227,11 +235,39 @@ class Worker:
             )
             JOBS_TOTAL.labels(result="failed").inc()
             return False  # leave pending; recovered via _recover_pending
+        finally:
+            keep_alive.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await keep_alive
+
+        if outcome == "active":
+            # Another consumer is still processing this job. Acking here
+            # would remove the PEL entry and destroy crash recovery
+            # (audit finding #9) — leave it pending for the owner to ack.
+            JOBS_TOTAL.labels(result="skipped").inc()
+            logger.info("pulse-worker.job_active_elsewhere", job_id=job_id)
+            return False
 
         await self._client.ack(message_id, stream=self._stream, group=self._group)
         JOBS_TOTAL.labels(result="succeeded").inc()
         logger.info("pulse-worker.job_done", job_id=job_id, attempts=attempts)
         return True
+
+    async def _extend_claim_loop(self, message_id: str) -> None:
+        """Periodically reset the message's PEL idle time during processing."""
+        interval = max(self._min_idle_ms / 3000.0, 1.0)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._client.extend_claim(
+                    message_id,
+                    stream=self._stream,
+                    group=self._group,
+                    consumer=self._consumer_name,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("pulse-worker.claim_extend_error", error=str(exc))
+                return
 
 
 # ---------------------------------------------------------------------------

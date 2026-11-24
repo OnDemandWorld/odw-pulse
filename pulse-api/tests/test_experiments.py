@@ -601,3 +601,31 @@ async def test_promote_winner(
     assert result["winner_variant_name"] == "treatment"
     assert "confidence" in result
     assert "reason" in result
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #10 — conversions > visitors must not crash statistics
+# ---------------------------------------------------------------------------
+
+
+def test_chi_squared_rejects_conversions_exceeding_visitors() -> None:
+    from pulse.core.experiment.statistics import bayesian_analysis, chi_squared_test
+
+    # Negative contingency cells (duplicate conversion events) previously
+    # produced chi2 < 0 -> math.sqrt ValueError.
+    result = chi_squared_test(150, 100, 10, 100)
+    assert result["error"] == "Invalid sample sizes"
+    assert result["is_significant"] is False
+
+    # p1 = 10/1 > 1 previously fed math.asin(math.sqrt(10)) -> domain error.
+    result = chi_squared_test(10, 1, 0, 1)
+    assert result["error"] == "Invalid sample sizes"
+
+    # Bayesian path gets the same guard (negative Beta parameters).
+    bayes = bayesian_analysis(10, 1, 0, 1)
+    assert bayes["error"] == "Invalid sample sizes"
+
+    # Valid tables still compute normally.
+    ok = chi_squared_test(10, 100, 15, 100)
+    assert "error" not in ok
+    assert 0.0 <= ok["p_value"] <= 1.0

@@ -80,6 +80,11 @@ services:
     env_file:
       - path: .env
         required: false
+    # Shared with pulse-worker so uploaded CSVs and result files are visible
+    # to both processes (audit finding #7). Paths must match worker.tasks.
+    volumes:
+      - bulk_uploads:/tmp/pulse_bulk_uploads
+      - bulk_outputs:/tmp/pulse_bulk_outputs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
       interval: 10s
@@ -105,6 +110,10 @@ services:
     env_file:
       - path: .env
         required: false
+    # Same shared volumes as pulse-api (audit finding #7).
+    volumes:
+      - bulk_uploads:/tmp/pulse_bulk_uploads
+      - bulk_outputs:/tmp/pulse_bulk_outputs
     depends_on:
       postgres:
         condition: service_healthy
@@ -148,3 +157,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  # Bulk-job input/output payloads shared between pulse-api and pulse-worker
+  # (audit finding #7).
+  bulk_uploads:
+  bulk_outputs:

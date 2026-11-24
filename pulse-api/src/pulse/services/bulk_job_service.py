@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.schemas.bulk_job import BulkJobConfig
@@ -52,11 +52,16 @@ class BulkJobService:
         workspace_id: uuid.UUID,
     ) -> BulkJob:
         """Get a bulk job by ID, scoped to workspace."""
+        # populate_existing: with expire_on_commit=False a plain re-SELECT
+        # returns the stale identity-map instance, so worker state polls
+        # would never observe pause/resume/cancel (audit finding #4).
         result = await db.execute(
-            select(BulkJob).where(
+            select(BulkJob)
+            .where(
                 BulkJob.id == job_id,
                 BulkJob.workspace_id == workspace_id,
             )
+            .execution_options(populate_existing=True)
         )
         job = result.scalar_one_or_none()
         if job is None:
@@ -72,7 +77,12 @@ class BulkJobService:
         job_id: uuid.UUID,
     ) -> BulkJob:
         """Get a bulk job by ID without workspace scoping (for workers)."""
-        result = await db.execute(select(BulkJob).where(BulkJob.id == job_id))
+        # populate_existing: always reflect committed DB state (audit #4).
+        result = await db.execute(
+            select(BulkJob)
+            .where(BulkJob.id == job_id)
+            .execution_options(populate_existing=True)
+        )
         job = result.scalar_one_or_none()
         if job is None:
             raise HTTPException(
@@ -80,6 +90,29 @@ class BulkJobService:
                 detail="Bulk job not found",
             )
         return job
+
+    async def claim_pending_job(
+        self,
+        db: AsyncSession,
+        job_id: uuid.UUID,
+    ) -> BulkJob | None:
+        """Atomically claim a PENDING job for processing (PENDING -> RUNNING).
+
+        The conditional UPDATE guarantees only one consumer wins under
+        duplicate stream delivery (audit finding #8). Returns the claimed
+        job, or None when the job is not PENDING.
+        """
+        result = await db.execute(
+            update(BulkJob)
+            .where(BulkJob.id == job_id, BulkJob.status == BulkJobStatus.PENDING)
+            .values(status=BulkJobStatus.RUNNING, updated_at=datetime.now(UTC))
+            .returning(BulkJob.id)
+        )
+        claimed = result.first()
+        await db.commit()
+        if claimed is None:
+            return None
+        return await self.get_job_unscoped(db, job_id)
 
     async def list_jobs(
         self,

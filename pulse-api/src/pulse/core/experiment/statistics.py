@@ -37,6 +37,21 @@ def chi_squared_test(
             "error": "Invalid sample sizes",
         }
 
+    # Conversions must not exceed visitors: duplicate conversion events can
+    # make a > total, producing negative contingency cells -> negative chi2
+    # -> math domain errors (audit finding #10).
+    if not (
+        0 <= control_conversions <= control_total
+        and 0 <= treatment_conversions <= treatment_total
+    ):
+        return {
+            "p_value": 1.0,
+            "confidence_level": 0.0,
+            "effect_size": 0.0,
+            "is_significant": False,
+            "error": "Invalid sample sizes",
+        }
+
     # Build 2x2 table
     # [[control_conv, control_non_conv],
     #  [treatment_conv, treatment_non_conv]]
@@ -76,9 +91,10 @@ def chi_squared_test(
     # Confidence level
     confidence_level = 1 - p_value
 
-    # Cohen's h (effect size for proportions)
-    p1 = a / (a + b) if (a + b) > 0 else 0
-    p2 = c / (c + d) if (c + d) > 0 else 0
+    # Cohen's h (effect size for proportions); clamp to [0, 1] so asin/sqrt
+    # can never receive an out-of-domain value (audit finding #10).
+    p1 = min(max(a / (a + b), 0.0), 1.0) if (a + b) > 0 else 0.0
+    p2 = min(max(c / (c + d), 0.0), 1.0) if (c + d) > 0 else 0.0
     effect_size = 2 * (math.asin(math.sqrt(p2)) - math.asin(math.sqrt(p1)))
 
     # Significance threshold (p < 0.05)
@@ -117,6 +133,19 @@ def bayesian_analysis(
         Dict with probability_treatment_better, expected_lift, credible_interval.
     """
     if control_total <= 0 or treatment_total <= 0:
+        return {
+            "probability_treatment_better": 0.5,
+            "expected_lift": 0.0,
+            "credible_interval": [0.0, 0.0],
+            "error": "Invalid sample sizes",
+        }
+
+    # Same guard as chi_squared_test: negative Beta parameters from
+    # conversions > visitors are meaningless (audit finding #10).
+    if not (
+        0 <= control_conversions <= control_total
+        and 0 <= treatment_conversions <= treatment_total
+    ):
         return {
             "probability_treatment_better": 0.5,
             "expected_lift": 0.0,

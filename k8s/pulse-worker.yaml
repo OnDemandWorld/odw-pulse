@@ -13,6 +13,14 @@ spec:
       labels:
         app: pulse-worker
     spec:
+      # Shared bulk-job payloads with pulse-api (audit finding #7).
+      volumes:
+        - name: bulk-uploads
+          persistentVolumeClaim:
+            claimName: pulse-bulk-uploads
+        - name: bulk-outputs
+          persistentVolumeClaim:
+            claimName: pulse-bulk-outputs
       # Run schema migrations before consuming (audit finding #6). The
       # worker image keeps pulse-api (incl. alembic.ini) under /app/pulse-api.
       initContainers:
@@ -52,6 +60,11 @@ spec:
               value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
             - name: REDIS_URL
               value: "redis://redis:6379/0"
+          volumeMounts:
+            - name: bulk-uploads
+              mountPath: /tmp/pulse_bulk_uploads
+            - name: bulk-outputs
+              mountPath: /tmp/pulse_bulk_outputs
           resources:
             requests:
               cpu: 100m

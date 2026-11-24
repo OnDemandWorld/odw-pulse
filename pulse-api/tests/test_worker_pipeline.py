@@ -86,6 +86,11 @@ class _FakeRedis:
     async def ack(self, message_id: str, stream: str = "", group: str = "") -> None:
         self.acked.append(message_id)
 
+    async def extend_claim(
+        self, message_id: str, stream: str = "", group: str = "", consumer: str = ""
+    ) -> None:
+        """No-op heartbeat (tests finish before the first interval elapses)."""
+
 
 def _make_worker() -> Worker:
     worker = Worker(redis_url="redis://fake")
@@ -243,3 +248,108 @@ async def test_reap_ignores_fresh_jobs(
 
     stats = await reap_stale_jobs(session_factory=reap_factory)
     assert stats == {"failed": 0, "requeued": 0}
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #9 — never ack a message another consumer is processing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_worker_does_not_ack_job_active_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _active(job_id: str) -> str:
+        return "active"
+
+    monkeypatch.setattr(worker_main, "process_job", _active)
+    worker = _make_worker()
+
+    acked = await worker.handle_message("1-0", {"job_id": "job-123"}, attempts=1)
+
+    assert acked is False
+    assert worker._client.acked == []  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #4 / #8 — fresh state reads and atomic job claim
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_job_observes_external_status_change(
+    reap_factory: async_sessionmaker[AsyncSession],
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    """A long-lived session must see status changes committed by other sessions."""
+    from pulse.api.schemas.bulk_job import BulkJobConfig
+    from tests.conftest import TEST_WORKSPACE_ID
+
+    svc = BulkJobService()
+    async with reap_factory() as db:
+        job = await svc.create_job(
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=1
+        )
+        jid = job.id
+        assert job.status == BulkJobStatus.PENDING
+
+        # Simulate the API pausing the job from a different session.
+        async with reap_factory() as other:
+            other_job = await svc.get_job_unscoped(other, jid)
+            other_job.status = BulkJobStatus.PAUSED
+            await other.commit()
+
+        fresh = await svc.get_job(db, jid, TEST_WORKSPACE_ID)
+        assert fresh.status == BulkJobStatus.PAUSED
+
+
+@pytest.mark.anyio
+async def test_claim_pending_job_is_atomic(
+    reap_factory: async_sessionmaker[AsyncSession],
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    """Only the first claim wins; a duplicate delivery gets None."""
+    from pulse.api.schemas.bulk_job import BulkJobConfig
+    from tests.conftest import TEST_WORKSPACE_ID
+
+    svc = BulkJobService()
+    async with reap_factory() as db:
+        job = await svc.create_job(
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=1
+        )
+        jid = job.id
+
+    async with reap_factory() as db:
+        claimed = await svc.claim_pending_job(db, jid)
+        assert claimed is not None
+        assert claimed.status == BulkJobStatus.RUNNING
+
+        duplicate = await svc.claim_pending_job(db, jid)
+        assert duplicate is None
+
+
+@pytest.mark.anyio
+async def test_process_bulk_job_outcomes_for_non_pending_jobs(
+    reap_factory: async_sessionmaker[AsyncSession],
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    """RUNNING/PAUSED jobs report 'active'; terminal jobs report 'terminal'."""
+    from pulse.api.schemas.bulk_job import BulkJobConfig
+    from pulse.worker.tasks import process_bulk_job
+    from tests.conftest import TEST_WORKSPACE_ID
+
+    svc = BulkJobService()
+    async with reap_factory() as db:
+        running = await svc.create_job(
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=1
+        )
+        running.status = BulkJobStatus.RUNNING
+        done = await svc.create_job(
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=1
+        )
+        done.status = BulkJobStatus.SUCCEEDED
+        await db.commit()
+        running_id, done_id = str(running.id), str(done.id)
+
+    assert await process_bulk_job(running_id, session_factory=reap_factory) == "active"
+    assert await process_bulk_job(done_id, session_factory=reap_factory) == "terminal"

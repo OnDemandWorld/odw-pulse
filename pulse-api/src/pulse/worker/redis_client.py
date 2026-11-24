@@ -120,6 +120,30 @@ class RedisClient:
         )
         return [(msg_id, fields) for msg_id, fields in claimed]
 
+    async def extend_claim(
+        self,
+        message_id: str,
+        stream: str = BULK_JOB_STREAM,
+        group: str = CONSUMER_GROUP,
+        consumer: str = "worker-1",
+    ) -> None:
+        """Reset a pending message's idle time (processing heartbeat).
+
+        Called periodically while a job is being processed so another
+        consumer's XAUTOCLAIM cannot steal the in-flight message (audit
+        finding #9). XCLAIM with JUSTID only refreshes ownership/idle time.
+        """
+        if self._redis is None:
+            raise RuntimeError("Redis client not connected; call connect() first")
+        await self._redis.xclaim(
+            name=stream,
+            groupname=group,
+            consumername=consumer,
+            min_idle_time=0,
+            message_ids=[message_id],
+            justid=True,
+        )
+
     async def pending_delivery_counts(
         self,
         stream: str = BULK_JOB_STREAM,

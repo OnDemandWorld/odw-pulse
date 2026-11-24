@@ -70,19 +70,19 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
   `finish_reason='error'` only feeds the circuit breaker; empty text is scored and returned. Raise a GenerationError on error responses; map to 502/503 and per-row bulk failures.
 - [x] **#3 — Migration 001 invalid on PostgreSQL: partitioned PKs omit partition key; child FKs illegal** ✅ fixed 2026-11-24 (composite PKs/FKs in DDL+ORM; regression test; real-PG alembic run pending Docker host) (`pulse-api/src/pulse/db/migrations/versions/001_initial_schema.py:258-263`)
   `content_pieces`/`audit_logs`/`experiment_assignments`/`experiment_exposures`/`performance_events` all affected. Composite PKs + composite FKs (or drop partitioning); add a real-PostgreSQL migration CI job.
-- [ ] **#4 — Pause/resume deadlock: worker polls a stale identity-map instance forever** (`pulse-api/src/pulse/worker/tasks.py:181-197`)
+- [x] **#4 — Pause/resume deadlock: worker polls a stale identity-map instance forever** (`pulse-api/src/pulse/worker/tasks.py:181-197`)
   `expire_on_commit=False` + plain re-SELECT in `get_job` → `_wait_for_resume` never sees RUNNING/CANCELLED; wedges the sequential worker. Use `populate_existing=True` or `db.refresh()` per poll; cap pause duration.
 - [x] **#5 — k8s `$(POSTGRES_PASSWORD)` never expands (envFrom vars aren't in the expansion map)** ✅ fixed 2026-11-24 (explicit secretKeyRef env in all 3 manifests; YAML validated) (`k8s/pulse-api.yaml:26-29`, also `pulse-worker.yaml:24-26`, `pulse-scheduler.yaml:26-28`)
   All three Python services crash-loop with a literal password. Define POSTGRES_PASSWORD via `valueFrom.secretKeyRef` in `env` before DATABASE_URL, or secret the whole URL.
 - [x] **#6 — No deployment path runs Alembic migrations; fresh deployments have an empty schema** ✅ fixed 2026-11-24 (compose migrate service + k8s initContainers + alembic.ini in images; live run pending Docker host) (`pulse-api/Dockerfile:16`)
   No compose migrate service, no k8s Job/initContainer, `alembic.ini` not in the image. Add a migration step (fix #3 first).
-- [ ] **#7 — Bulk input/output files are container-local /tmp; no shared volume between API and worker** (`pulse-api/src/pulse/api/v1/bulk_jobs.py:39-41`)
+- [x] **#7 — Bulk input/output files are container-local /tmp; no shared volume between API and worker** (`pulse-api/src/pulse/api/v1/bulk_jobs.py:39-41`)
   Every job fails "Input file missing" in compose/k8s; downloads 404 permanently. Move payloads to S3/MinIO (fix #85 signing first) or a shared RWX volume.
-- [ ] **#8 — Non-atomic PENDING→RUNNING claim allows duplicate job processing** (`pulse-api/src/pulse/worker/tasks.py:72-85`)
+- [x] **#8 — Non-atomic PENDING→RUNNING claim allows duplicate job processing** (`pulse-api/src/pulse/worker/tasks.py:72-85`)
   Reaper re-enqueue + read-then-write guard → two workers generate the same job (double LLM spend). Claim via conditional `UPDATE ... WHERE status='pending' RETURNING` or `FOR UPDATE SKIP LOCKED`.
-- [ ] **#9 — XAUTOCLAIM min-idle 60s < job runtime; second worker claims and ACKs in-flight messages** (`pulse-worker/src/pulse_worker/main.py:169-188`)
+- [x] **#9 — XAUTOCLAIM min-idle 60s < job runtime; second worker claims and ACKs in-flight messages** (`pulse-worker/src/pulse_worker/main.py:169-188`)
   Crash recovery destroyed: acked-but-running jobs are never retried after a crash. Heartbeat/extend claims during processing; never ack a RUNNING job you don't own.
-- [ ] **#10 — Results endpoint crashes (ValueError) when conversions > unique visitors** (`pulse-api/src/pulse/core/experiment/statistics.py:58-82`)
+- [x] **#10 — Results endpoint crashes (ValueError) when conversions > unique visitors** (`pulse-api/src/pulse/core/experiment/statistics.py:58-82`)
   Negative contingency cells → `sqrt(negative)`; `asin(sqrt(p>1))` domain error. Reachable with normal server-side conversion events (no visitor_hash). Validate/clamp inputs; fix counting model (#43).
 - [ ] **#11 — Impersonation grants any self-registered owner access to ANY workspace** (`pulse-api/src/pulse/api/v1/auth.py:373-422`)
   Only checks caller role + target existence; no membership check; audit written to caller's workspace only. Require membership/admin of target (or platform super-admin); audit in target workspace. *(Acknowledged TODO in docs, but a live cross-tenant bypass.)*

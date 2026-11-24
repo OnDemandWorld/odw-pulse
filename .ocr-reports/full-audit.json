@@ -51,7 +51,9 @@
     "title": "Paused bulk job never observes resume/cancel: _wait_for_resume loops forever on a stale identity-map instance and wedges the worker",
     "root_cause": "The session factory uses expire_on_commit=False (db/session.py:101). BulkJobService.get_job/get_job_unscoped (services/bulk_job_service.py:48-67) issue plain selects without populate_existing, so a re-SELECT of an already-loaded BulkJob returns the cached object without refreshing attributes. Inside _wait_for_resume nothing ever commits/refreshes/expires, so fresh.status stays PAUSED forever after the API sets RUNNING/CANCELLED in the DB. Pause is only noticed by accident because increment_progress calls db.refresh. The standalone worker processes messages sequentially, so one wedged job blocks all further jobs.",
     "suggested_fix": "Add .execution_options(populate_existing=True) to get_job/get_job_unscoped selects, or db.refresh()/expire the instance on every poll in _wait_for_resume and the pause/cancel gate; add a max pause duration after which the job is failed/cancelled.",
-    "failure_scenario": "Pause a running job (worker enters _wait_for_resume), then resume or cancel via the API: DB row becomes RUNNING/CANCELLED but every poll returns the cached PAUSED object. The job never resumes, that worker replica processes no further jobs, and SIGTERM cannot break the loop. The PAUSED job is also never reaped (reaper targets RUNNING/PENDING only)."
+    "failure_scenario": "Pause a running job (worker enters _wait_for_resume), then resume or cancel via the API: DB row becomes RUNNING/CANCELLED but every poll returns the cached PAUSED object. The job never resumes, that worker replica processes no further jobs, and SIGTERM cannot break the loop. The PAUSED job is also never reaped (reaper targets RUNNING/PENDING only).",
+    "status": "fixed",
+    "verification_notes": "cd pulse-api && .venv/bin/pytest tests -q -> 107 passed (exit 0); ruff/mypy clean. get_job/get_job_unscoped now use populate_existing=True. Regression test: test_get_job_observes_external_status_change (tests/test_worker_pipeline.py)."
   },
   {
     "id": 5,
@@ -91,7 +93,9 @@
     "title": "Bulk-job input/output files live in container-local /tmp with no shared volume; jobs always fail in the multi-container deployment",
     "root_cause": "The API writes uploads to its own container's tempfile.gettempdir()/pulse_bulk_uploads (line 40, 88-89); the worker checks Path(input_path).exists() on its own filesystem (worker/tasks.py:89-94) and writes outputs to its own /tmp. docker-compose.yml defines no volumes for pulse-api/pulse-worker and k8s has no shared PVC; the API also runs 2 replicas. The comment 'must match worker.tasks' matches only the path string, not the filesystem. The download endpoint (bulk_jobs.py:240) likewise never sees the worker's output file.",
     "suggested_fix": "Store input/output blobs in the already-provisioned S3/MinIO storage (STORAGE_* settings exist) and keep URIs in input_file/output_file, or mount a shared ReadWriteMany volume at the same path in API and worker containers; key objects by job id.",
-    "failure_scenario": "Compose/k8s with Redis up: POST /bulk-jobs succeeds, the standalone worker consumes the message, Path(input_file).exists() is False in the worker container -> every job FAILED with 'Input file missing'. Even if processing succeeded, GET /bulk-jobs/{id}/download 404s permanently. Only the Redis-down in-process fallback on a single API instance works."
+    "failure_scenario": "Compose/k8s with Redis up: POST /bulk-jobs succeeds, the standalone worker consumes the message, Path(input_file).exists() is False in the worker container -> every job FAILED with 'Input file missing'. Even if processing succeeded, GET /bulk-jobs/{id}/download 404s permanently. Only the Redis-down in-process fallback on a single API instance works.",
+    "status": "fixed",
+    "verification_notes": "YAML validated (compose + k8s). compose: named volumes bulk_uploads/bulk_outputs mounted at /tmp/pulse_bulk_uploads and /tmp/pulse_bulk_outputs in BOTH pulse-api and pulse-worker. k8s: new k8s/bulk-storage.yaml RWX PVCs + volumeMounts on api/worker. NOTE: k8s PVCs need a ReadWriteMany-capable StorageClass (documented in manifest); live compose/k8s run pending Docker host."
   },
   {
     "id": 8,
@@ -103,7 +107,9 @@
     "title": "Non-atomic PENDING->RUNNING check allows duplicate processing of the same job",
     "root_cause": "The at-least-once guard reads job.status (get_job_unscoped) and only later commits RUNNING via svc.update_status; there is no row lock or conditional UPDATE ... WHERE status='pending'. Duplicate stream messages are routine: the reaper re-enqueues PENDING jobs older than 10 min even when the original message is still queued, and scheduler + worker-startup reapers can run concurrently. Two workers blocked on XREADGROUP can receive the two copies simultaneously. Related: #27 (progress read-modify-write race).",
     "suggested_fix": "Claim atomically: UPDATE bulk_jobs SET status='running', updated_at=now() WHERE id=:id AND status='pending' RETURNING id (or SELECT ... FOR UPDATE SKIP LOCKED) and proceed only if a row was claimed; apply the same conditional transition in mark_job_failed/reaper.",
-    "failure_scenario": "Job sits in the stream >10 min (worker busy) -> reaper re-enqueues a second copy -> workers A and B each consume one copy, both read PENDING, both set RUNNING, both generate every row (double LLM spend), both increment progress via read-modify-write (lost updates), both overwrite <job_id>.csv."
+    "failure_scenario": "Job sits in the stream >10 min (worker busy) -> reaper re-enqueues a second copy -> workers A and B each consume one copy, both read PENDING, both set RUNNING, both generate every row (double LLM spend), both increment progress via read-modify-write (lost updates), both overwrite <job_id>.csv.",
+    "status": "fixed",
+    "verification_notes": "107 tests pass, ruff/mypy clean. New BulkJobService.claim_pending_job: conditional UPDATE ... WHERE status='pending' RETURNING id; tasks.py uses it. Regression tests: test_claim_pending_job_is_atomic, test_process_bulk_job_outcomes_for_non_pending_jobs."
   },
   {
     "id": 9,
@@ -115,7 +121,9 @@
     "title": "XAUTOCLAIM min-idle (60s) is shorter than job runtime: a second worker claims and ACKs a message another worker is still processing, destroying crash recovery",
     "root_cause": "Messages are acked only after the whole job finishes and nothing extends PEL idle time during processing. DEFAULT_MIN_IDLE_MS=60_000 (line 37) while multi-row LLM jobs run for minutes. With 2 worker replicas, worker B's _recover_pending XAUTOCLAIMs worker A's in-flight message; tasks.py sees status RUNNING and returns normally (skip path), then handle_message acks it (line 231). The message leaves the PEL while A is still working.",
     "suggested_fix": "Make the visibility timeout exceed worst-case job duration or implement heartbeat/claim-extension (periodic XCLAIM JUSTID to reset idle while processing); never ack a message whose job is RUNNING unless this consumer owns it — ack only after verifying the job reached a terminal state owned by this delivery.",
-    "failure_scenario": "Worker A processes a 5-minute job; after 60s worker B claims the message, sees RUNNING, acks it. A is then OOM-killed mid-job: no pending message remains, so no retry ever happens; the job sits RUNNING until the reaper marks it FAILED 10 minutes later. Work is lost and never reprocessed."
+    "failure_scenario": "Worker A processes a 5-minute job; after 60s worker B claims the message, sees RUNNING, acks it. A is then OOM-killed mid-job: no pending message remains, so no retry ever happens; the job sits RUNNING until the reaper marks it FAILED 10 minutes later. Work is lost and never reprocessed.",
+    "status": "fixed",
+    "verification_notes": "107 tests pass, ruff/mypy clean. process_bulk_job returns processed/terminal/active; handle_message never acks 'active' outcomes; PEL heartbeat (_extend_claim_loop + RedisClient.extend_claim XCLAIM JUSTID) keeps in-flight messages from being stolen. Regression test: test_worker_does_not_ack_job_active_elsewhere."
   },
   {
     "id": 10,
@@ -127,7 +135,9 @@
     "title": "Results endpoint crashes (ValueError) when conversions exceed unique visitors — negative contingency cells and asin domain error",
     "root_cause": "compute_results (core/experiment/results.py:49-57) counts every conversion EVENT while the denominator is deduplicated visitors, and ingestion accepts events without visitor_hash, so conversions > total is reachable. chi_squared_test guards only n==0 and denominator==0: b=total-conversions<0 can make the denominator negative -> chi2<0 -> math.sqrt(chi2/2) ValueError; independently p1=conversions/visitors>1 feeds math.asin(math.sqrt(p1)) (lines 80-82) -> math domain error. Both propagate as unhandled 500 from GET /experiments/{id}/results. Even without a crash, negative cells produce meaningless p-values.",
     "suggested_fix": "Validate 0 <= conversions <= total for both groups and return the 'Invalid sample sizes' result otherwise; clamp proportions to [0,1] for Cohen's h; fix the counting model (#43) and validate conversion/visitor consistency at ingestion.",
-    "failure_scenario": "Any member posts 10 conversion events with visitor_hash=null plus 1 impression with visitor_hash='v1' to a running experiment (server-side conversion tracking without visitor IDs is normal). GET /experiments/{id}/results -> asin(sqrt(10)) ValueError -> 500; results and promote-winner permanently unusable for that experiment. Also reachable cross-workspace via #12."
+    "failure_scenario": "Any member posts 10 conversion events with visitor_hash=null plus 1 impression with visitor_hash='v1' to a running experiment (server-side conversion tracking without visitor IDs is normal). GET /experiments/{id}/results -> asin(sqrt(10)) ValueError -> 500; results and promote-winner permanently unusable for that experiment. Also reachable cross-workspace via #12.",
+    "status": "fixed",
+    "verification_notes": "107 tests pass, ruff/mypy clean. chi_squared_test and bayesian_analysis reject conversions>visitors with 'Invalid sample sizes'; Cohen's h proportions clamped to [0,1]. Regression test: test_chi_squared_rejects_conversions_exceeding_visitors (tests/test_experiments.py). Root counting-model fix tracked separately as #43."
   },
   {
     "id": 11,

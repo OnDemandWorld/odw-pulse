@@ -46,8 +46,14 @@ _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 async def process_bulk_job(
     job_id: str,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
-) -> None:
+) -> str:
     """Process a bulk job end-to-end.
+
+    Returns an outcome string for the stream consumer (audit finding #9):
+    ``"processed"`` (job reached a terminal state — safe to ack),
+    ``"terminal"`` (job was already finished — safe to ack), or
+    ``"active"`` (another consumer owns the RUNNING/PAUSED job — the
+    message must NOT be acked by this consumer).
 
     1. Load the job from the database.
     2. Transition status to RUNNING.
@@ -70,19 +76,27 @@ async def process_bulk_job(
     jid = uuid.UUID(job_id)
 
     async with session_factory() as db:
-        job = await svc.get_job_unscoped(db, jid)
-
-        # At-least-once delivery guard: a message can arrive twice (retry,
-        # requeue after a crash).  Only PENDING jobs still need processing.
-        if job.status != BulkJobStatus.PENDING:
+        # Atomic claim (audit finding #8): the conditional PENDING->RUNNING
+        # UPDATE guarantees only one worker processes a job even when the
+        # stream delivers it twice (reaper requeue, XAUTOCLAIM).
+        job = await svc.claim_pending_job(db, jid)
+        if job is None:
+            existing = await svc.get_job_unscoped(db, jid)
+            if existing.status in (BulkJobStatus.RUNNING, BulkJobStatus.PAUSED):
+                # Another consumer may still be working on it. Do not ack
+                # its message (audit finding #9) — report "active".
+                logger.info(
+                    "Job %s is %s — owned by another consumer; leaving pending",
+                    job_id,
+                    existing.status.value,
+                )
+                return "active"
             logger.info(
                 "Job %s is %s — nothing to do (duplicate delivery?)",
                 job_id,
-                job.status.value,
+                existing.status.value,
             )
-            return
-
-        await svc.update_status(db, jid, job.workspace_id, BulkJobStatus.RUNNING)
+            return "terminal"
 
         config_dict = svc.extract_config(job)
         config = BulkJobConfig(**config_dict)
@@ -91,7 +105,7 @@ async def process_bulk_job(
         if not input_path or not Path(input_path).exists():
             await svc.update_status(db, jid, job.workspace_id, BulkJobStatus.FAILED)
             logger.error("Input file missing for job %s: %s", job_id, input_path)
-            return
+            return "processed"
 
         rows = _read_input_csv(input_path)
         await svc.update_status(
@@ -103,7 +117,7 @@ async def process_bulk_job(
 
         if not rows:
             await svc.update_status(db, jid, job.workspace_id, BulkJobStatus.SUCCEEDED)
-            return
+            return "processed"
 
         # Lazily import orchestrator to avoid heavy deps at module load.
         from pulse.api.v1.generate import get_orchestrator
@@ -171,6 +185,7 @@ async def process_bulk_job(
             job.progress,
             job.total,
         )
+        return "processed"
 
 
 # ---------------------------------------------------------------------------
