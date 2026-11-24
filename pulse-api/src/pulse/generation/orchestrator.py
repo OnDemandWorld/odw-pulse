@@ -16,7 +16,7 @@ from sqlalchemy import select
 from pulse.cultural.engine import CulturalAdaptationEngine
 from pulse.cultural.market_profile import load_market_profile_with_fallback
 from pulse.generation.models import GenerationError, GenerationRequest, GenerationResult
-from pulse.llm.fallback_router import FallbackRouter
+from pulse.llm.fallback_router import CircuitOpenError, FallbackRouter
 from pulse.models.brand_voice import BrandVoice
 from pulse.prompts.composer import PromptComposer
 from pulse.quality.engine import QualityScoringEngine
@@ -165,7 +165,10 @@ class GenerationOrchestrator:
         )
 
         # Step 5: Select LLM provider via fallback router
-        provider = await self._router.route_request()
+        try:
+            provider = await self._router.route_request()
+        except CircuitOpenError as err:
+            raise GenerationError("LLM provider unavailable (circuit open)") from err
 
         # Step 6: Call provider. System and user prompts are sent separately
         # so the cultural/brand guidelines keep system-role authority

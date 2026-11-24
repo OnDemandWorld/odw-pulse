@@ -22,6 +22,16 @@ class CircuitState(Enum):
     HALF_OPEN = "half_open"  # Testing if primary recovered
 
 
+class CircuitOpenError(RuntimeError):
+    """Raised when the circuit is open and no distinct fallback exists.
+
+    With a single registered provider (secondary is primary), routing
+    OPEN-state traffic back to the failing provider provides no protection
+    (audit finding #60). Fail fast instead so callers record a real error
+    rather than hammering a dead service with full timeouts.
+    """
+
+
 @dataclass
 class CircuitBreakerConfig:
     """Configuration for circuit breaker behavior.
@@ -101,6 +111,8 @@ class FallbackRouter:
             # Check if recovery timeout has elapsed
             if time.time() - self._last_failure_time >= self.config.recovery_timeout:
                 self._transition_to(CircuitState.HALF_OPEN)
+            elif self.secondary is self.primary:
+                raise CircuitOpenError("LLM circuit open and no fallback provider")
             else:
                 return self.secondary
         if self._state == CircuitState.CLOSED:
@@ -111,6 +123,8 @@ class FallbackRouter:
         if self._half_open_probes < max(1, self.config.success_threshold):
             self._half_open_probes += 1
             return self.primary
+        if self.secondary is self.primary:
+            raise CircuitOpenError("LLM circuit half-open and no fallback provider")
         return self.secondary
 
     def _is_primary(self, provider: str | None) -> bool:

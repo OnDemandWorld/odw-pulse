@@ -42,13 +42,18 @@ def get_orchestrator() -> GenerationOrchestrator:
         primary = None
         secondary = None
 
-        providers = registry.list_providers()
+        # Explicit preference order (audit finding #60) — never depend on
+        # dict insertion order for primary/secondary selection.
+        preference = ["openai", "anthropic", "ollama"]
+        providers = [p for p in preference if p in registry.list_providers()]
+        providers += [p for p in registry.list_providers() if p not in preference]
         if len(providers) >= 2:
             primary = registry.get(providers[0])
             secondary = registry.get(providers[1])
         elif len(providers) == 1:
             primary = registry.get(providers[0])
-            # Use same provider as secondary for now
+            # Single provider: the router fails fast (CircuitOpenError)
+            # while open instead of hammering the same dead provider.
             secondary = primary
         else:
             # No providers registered — this will fail at generation time

@@ -188,8 +188,10 @@ class Worker:
             return
 
         for message_id, fields in claimed:
+            # XAUTOCLAIM already incremented times_delivered; the pre-claim
+            # count lags by one (audit finding #87).
             await self.handle_message(
-                message_id, fields, attempts=counts.get(message_id, 1)
+                message_id, fields, attempts=counts.get(message_id, 0) + 1
             )
 
     async def handle_message(

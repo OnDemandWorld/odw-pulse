@@ -932,3 +932,37 @@ async def test_update_experiment_preserves_variant_ids_and_events(
         )
     ).scalar_one()
     assert event.variant_id == control_id
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #82/#86 — basis-point assignment and tracking URLs
+# ---------------------------------------------------------------------------
+
+
+def test_assignment_uses_integer_basis_points() -> None:
+    from pulse.core.experiment.assignment import _assign_bucket
+
+    # 7% variant owns exactly buckets 0-699 at basis-point granularity
+    # (float cumulative math used to leak bucket boundaries).
+    weights = {"a": 0.07, "b": 0.93}
+    assert _assign_bucket(699, weights) == "a"
+    assert _assign_bucket(700, weights) == "b"
+    assert _assign_bucket(9999, weights) == "b"
+    # Sub-1% weights are representable at %10000 granularity.
+    tiny = {"rare": 0.005, "rest": 0.995}
+    assert _assign_bucket(49, tiny) == "rare"
+    assert _assign_bucket(50, tiny) == "rest"
+
+
+def test_tracking_url_preserves_repeated_and_blank_params() -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    from pulse.core.experiment.tracking import generate_tracking_url
+
+    url = generate_tracking_url(
+        "https://x.com/p?tag=a&tag=b&ref=", "exp1", "control"
+    )
+    params = parse_qs(urlparse(url).query, keep_blank_values=True)
+    assert params["tag"] == ["a", "b"]
+    assert params["ref"] == [""]
+    assert params["experiment_id"] == ["exp1"]

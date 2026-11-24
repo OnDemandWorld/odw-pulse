@@ -448,3 +448,33 @@ async def test_push_job_bounds_stream_length() -> None:
     await client.push_job("job-1")
     assert stub.xadd_kwargs[0].get("maxlen") == 10_000
     assert stub.xadd_kwargs[0].get("approximate") is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #87 — XPENDING pagination covers the whole PEL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_pending_delivery_counts_paginates() -> None:
+    from pulse.worker.redis_client import RedisClient
+
+    class _StubRedis:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def xpending_range(self, name: str, groupname: str, min: str, max: str, count: int) -> list[dict[str, Any]]:
+            self.calls.append(min)
+            if min == "-":
+                return [{"message_id": f"{i}-0", "times_delivered": 2} for i in range(1000)]
+            if min == "999-0":
+                return [{"message_id": "1000-0", "times_delivered": 7}]
+            return []
+
+    client = RedisClient(redis_url="redis://fake")
+    stub = _StubRedis()
+    client._redis = stub
+    counts = await client.pending_delivery_counts()
+    assert len(counts) == 1001
+    assert counts["1000-0"] == 7
+    assert stub.calls == ["-", "999-0"]

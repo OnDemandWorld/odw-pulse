@@ -821,7 +821,9 @@
     "title": "Anthropic adapter reads only the first content block; non-text first block yields empty 'successful' content",
     "root_cause": "text = content[0].get('text', '') assumes the first block is the text block. If the response begins with a non-text block (e.g. a thinking block with extended thinking, or tool_use) or contains multiple text blocks, the extracted text is empty or truncated while finish_reason stays 'end_turn' — recorded as success (compounds #2).",
     "suggested_fix": "Concatenate all blocks of type 'text'; treat an empty extraction as an error response.",
-    "failure_scenario": "Anthropic response content=[{'type':'thinking',...},{'type':'text','text':'...'}] -> text='' with finish_reason='end_turn' -> orchestrator records success and returns empty content."
+    "failure_scenario": "Anthropic response content=[{'type':'thinking',...},{'type':'text','text':'...'}] -> text='' with finish_reason='end_turn' -> orchestrator records success and returns empty content.",
+    "status": "fixed",
+    "verification_notes": "145 tests pass, ruff/mypy clean. Anthropic adapter concatenates all type=text blocks. Regression test: test_anthropic_concatenates_all_text_blocks (thinking block first + two text blocks)."
   },
   {
     "id": 60,
@@ -833,7 +835,9 @@
     "title": "Fallback provides no protection when secondary is the same provider or chosen by registration order",
     "root_cause": "The router blindly trusts primary/secondary identities. The only production wiring (api/v1/generate.py:39-45) picks providers[0]/providers[1] by dict insertion order (no configured preference) and sets secondary=primary when just one provider is registered. In OPEN state route_request then returns the very provider that is failing.",
     "suggested_fix": "Select primary/secondary by explicit config preference (not registration order); when only one provider exists, disable fallback routing or apply backoff instead of routing OPEN-state traffic to the same provider; optionally guard FallbackRouter against primary is secondary.",
-    "failure_scenario": "Only OLLAMA_BASE_URL configured: Ollama goes down -> 3 failures -> circuit OPEN -> route_request returns the same dead provider -> every request still hits the downed service with full timeouts; the breaker changes nothing."
+    "failure_scenario": "Only OLLAMA_BASE_URL configured: Ollama goes down -> 3 failures -> circuit OPEN -> route_request returns the same dead provider -> every request still hits the downed service with full timeouts; the breaker changes nothing.",
+    "status": "fixed",
+    "verification_notes": "145 tests pass. Explicit provider preference order (openai/anthropic/ollama); single-provider wiring now fails fast via CircuitOpenError while OPEN/HALF_OPEN-excess instead of hammering the dead provider; orchestrator maps it to GenerationError. Regression test: test_single_provider_circuit_fails_fast."
   },
   {
     "id": 61,
@@ -1099,7 +1103,9 @@
     "title": "Floating-point cumulative boundary gives off-by-one bucket allocation; granularity is %100, not the documented %10000",
     "root_cause": "bucket < cumulative*100 with float weights: e.g. weight 0.07 yields cumulative*100 = 7.000000000000001, so bucket 7 is assigned to the 7% variant (8 buckets instead of 7). Also hash_int % 100 contradicts CLAUDE.md/TSD's %10000 design, so sub-1% weights cannot be represented at all.",
     "suggested_fix": "Use integer basis points: bucket = hash_int % 10000 and cumulative weights scaled to integers (round(normalized*10000)) with the last variant taking the remainder.",
-    "failure_scenario": "assign_variant(v, e, {'a': 0.07, 'b': 0.93}): visitors hashing to bucket 7 get 'a' although 'a' should own exactly buckets 0-6 — systematic 1% traffic misallocation for any weight whose float product rounds up."
+    "failure_scenario": "assign_variant(v, e, {'a': 0.07, 'b': 0.93}): visitors hashing to bucket 7 get 'a' although 'a' should own exactly buckets 0-6 — systematic 1% traffic misallocation for any weight whose float product rounds up.",
+    "status": "fixed",
+    "verification_notes": "145 tests pass. Assignment uses %10000 buckets with integer basis-point cumulative weights (_assign_bucket); last variant takes remainder. Regression test: test_assignment_uses_integer_basis_points (boundaries + sub-1% weights)."
   },
   {
     "id": 83,
@@ -1147,7 +1153,9 @@
     "title": "Tracking-URL generation silently drops repeated and blank query parameters from the base URL",
     "root_cause": "parse_qs returns lists but the code keeps only v[0] per key, and parse_qs defaults to keep_blank_values=False. A base URL like ?tag=a&tag=b&ref= loses tag=b and ref entirely when the tracking URL is rebuilt.",
     "suggested_fix": "Preserve multi-values with parse_qs(..., keep_blank_values=True) and urlencode(doseq=True), updating only the UTM/experiment keys.",
-    "failure_scenario": "generate_tracking_url('https://x.com/p?tag=a&tag=b&ref=', ...) returns a URL with only tag=a and no ref — downstream attribution/campaign parameters corrupted."
+    "failure_scenario": "generate_tracking_url('https://x.com/p?tag=a&tag=b&ref=', ...) returns a URL with only tag=a and no ref — downstream attribution/campaign parameters corrupted.",
+    "status": "fixed",
+    "verification_notes": "145 tests pass. parse_qs(keep_blank_values=True) + urlencode(doseq=True) preserve repeated/blank params. Regression test: test_tracking_url_preserves_repeated_and_blank_params."
   },
   {
     "id": 87,
@@ -1159,7 +1167,9 @@
     "title": "Dead-letter attempt count is read before XAUTOCLAIM increments it (off-by-one), and pending counts are capped at 1000",
     "root_cause": "pending_delivery_counts is fetched before claim_stale, but XAUTOCLAIM increments times_delivered, so attempts lags the true delivery count by one — a message is processed one extra time beyond max_attempts before dead-lettering. Also xpending_range count=1000 (worker/redis_client.py:131-137) without pagination means messages beyond the first 1000 PEL entries default to attempts=1 and can evade the dead-letter threshold.",
     "suggested_fix": "Use counts.get(message_id, 0) + 1 (post-claim semantics) or re-read XPENDING after claiming; paginate xpending_range until exhausted.",
-    "failure_scenario": "max_attempts=5: a poison job is delivered 7 times before dead-lettering instead of 6; with >1000 pending messages, deep-PEL entries always look like first attempts and are retried indefinitely."
+    "failure_scenario": "max_attempts=5: a poison job is delivered 7 times before dead-lettering instead of 6; with >1000 pending messages, deep-PEL entries always look like first attempts and are retried indefinitely.",
+    "status": "fixed",
+    "verification_notes": "145 tests pass. pending_delivery_counts paginates XPENDING until exhausted; claimed-message attempts = pre-claim count + 1 (post-XAUTOCLAIM semantics). Regression test: test_pending_delivery_counts_paginates (1001 entries across 2 pages)."
   },
   {
     "id": 88,

@@ -153,17 +153,35 @@ class RedisClient:
         stream: str = BULK_JOB_STREAM,
         group: str = CONSUMER_GROUP,
     ) -> dict[str, int]:
-        """Return ``{message_id: times_delivered}`` for all pending messages."""
+        """Return ``{message_id: times_delivered}`` for ALL pending messages.
+
+        Paginates XPENDING (audit finding #87): a single count=1000 call
+        let deep-PEL entries default to attempts=1 and evade dead-lettering.
+        """
         if self._redis is None:
             raise RuntimeError("Redis client not connected; call connect() first")
-        entries: list[Any] = await self._redis.xpending_range(
-            name=stream,
-            groupname=group,
-            min="-",
-            max="+",
-            count=1000,
-        )
-        return {entry["message_id"]: int(entry["times_delivered"]) for entry in entries}
+        counts: dict[str, int] = {}
+        start = "-"
+        while True:
+            entries: list[Any] = await self._redis.xpending_range(
+                name=stream,
+                groupname=group,
+                min=start,
+                max="+",
+                count=1000,
+            )
+            if not entries:
+                break
+            new = 0
+            for entry in entries:
+                mid = entry["message_id"]
+                if mid not in counts:
+                    counts[mid] = int(entry["times_delivered"])
+                    new += 1
+            if new == 0 or len(entries) < 1000:
+                break
+            start = entries[-1]["message_id"]
+        return counts
 
     async def ack(
         self,

@@ -547,3 +547,57 @@ async def test_brand_voice_and_db_market_profile_are_applied(
     assert "Friendly and bold" in mock.last_system
     # #20: DB-configured dimensions overrode the built-in defaults.
     assert result.cultural_directive["formality"] == 0.9
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #59/#60 — Anthropic blocks and single-provider breaker
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_anthropic_concatenates_all_text_blocks() -> None:
+    import httpx
+
+    from pulse.llm.providers.anthropic import AnthropicProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {"type": "thinking", "thinking": "hmm"},
+                    {"type": "text", "text": "Hello "},
+                    {"type": "text", "text": "world"},
+                ],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        )
+
+    provider = AnthropicProvider(api_key="test")
+    provider._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.anthropic.com/v1"
+    )
+    response = await provider.generate("hi")
+    assert response.text == "Hello world"
+    assert response.finish_reason == "end_turn"
+
+
+@pytest.mark.anyio
+async def test_single_provider_circuit_fails_fast() -> None:
+    from pulse.generation.models import GenerationError
+    from pulse.llm.fallback_router import CircuitOpenError
+
+    provider = MockLLMProvider(name="solo", should_fail=True)
+    config = CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0)
+    router = FallbackRouter(primary=provider, secondary=provider, config=config)
+
+    await router.record_failure("solo")  # opens the circuit
+    with pytest.raises(CircuitOpenError):
+        await router.route_request()
+
+    orchestrator = GenerationOrchestrator(fallback_router=router)
+    with pytest.raises(GenerationError):
+        await orchestrator.generate(
+            GenerationRequest(content_type="blog_post", target_market="en-US", prompt="x")
+        )
