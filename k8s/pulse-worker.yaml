@@ -58,8 +58,13 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: DATABASE_URL
               value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: REDIS_PASSWORD
             - name: REDIS_URL
-              value: "redis://redis:6379/0"
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
           volumeMounts:
             - name: bulk-uploads
               mountPath: /tmp/pulse_bulk_uploads

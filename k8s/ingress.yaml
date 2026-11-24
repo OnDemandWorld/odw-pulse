@@ -3,9 +3,26 @@ kind: Ingress
 metadata:
   name: pulse
   namespace: pulse
+  annotations:
+    # Match the API's 5 MiB bulk-CSV limit (audit finding #32); the
+    # ingress-nginx default 1m would reject uploads the backend accepts.
+    nginx.ingress.kubernetes.io/proxy-body-size: "6m"
+    # Uncomment with a cert-manager Issuer to enable TLS (audit finding #39):
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
   # NOTE: no rewrite-target — /api/v1/* must reach pulse-api unmodified
   # (routers are mounted at /api/v1), and /* must reach the UI as-is.
 spec:
+  # TLS (audit finding #39): credentials and JWTs must not travel in
+  # plaintext. Provision a certificate first — either via cert-manager
+  # (uncomment the annotation above and the tls block below) or by
+  # creating the pulse-tls Secret out-of-band — then enable this block.
+  # Left commented because enabling it without a valid certificate would
+  # serve the ingress controller's default self-signed cert.
+  # tls:
+  #   - hosts:
+  #       - pulse.local
+  #     secretName: pulse-tls
   rules:
     - host: pulse.local
       http:

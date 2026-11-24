@@ -1,12 +1,15 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import apiClient from '@/api/client';
 import { ContentPiece, ContentStatus, ListResponse } from '@/types';
 
-function fetchContent() {
+const PAGE_SIZE = 20;
+
+function fetchContent(offset: number) {
   return apiClient
-    .get<ListResponse<ContentPiece>>('/content')
-    .then((res) => res.data.items);
+    .get<ListResponse<ContentPiece>>('/content', { params: { limit: PAGE_SIZE, offset } })
+    .then((res) => res.data);
 }
 
 const STATUS_COLORS: Record<ContentStatus, string> = {
@@ -18,10 +21,13 @@ const STATUS_COLORS: Record<ContentStatus, string> = {
 };
 
 export default function ContentList() {
-  const { data: content, isLoading, error } = useQuery({
-    queryKey: ['content'],
-    queryFn: fetchContent,
+  const [offset, setOffset] = useState(0);
+  const { data: contentPage, isLoading, error } = useQuery({
+    queryKey: ['content', offset],
+    queryFn: () => fetchContent(offset),
   });
+  const content = contentPage?.items;
+  const total = contentPage?.total ?? 0;
 
   return (
     <div className="max-w-6xl">
@@ -49,7 +55,7 @@ export default function ContentList() {
           </div>
         )}
 
-        {content && content.length === 0 && (
+        {total === 0 && (
           <div className="p-8 text-center text-gray-500">
             No content yet.{' '}
             <Link to="/generate" className="text-blue-600 hover:underline">
@@ -110,6 +116,29 @@ export default function ContentList() {
           </table>
         )}
       </div>
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
+          <span>
+            Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="space-x-2">
+            <button
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              disabled={offset + PAGE_SIZE >= total}
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

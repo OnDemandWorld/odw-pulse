@@ -415,7 +415,9 @@
     "title": "Logout does not clear the TanStack Query cache — cross-workspace data bleed on next login",
     "root_cause": "handleLogout removes the token and does an SPA navigate('/login') without queryClient.clear(). All query keys (['me'], ['content'], ['dashboard-totals'], ['bulk-jobs'], ['experiments'], ...) are workspace-agnostic and stay cached for the default 5-minute gcTime. The 401 interceptor path does a full page reload (clearing the cache), but the normal logout path does not.",
     "suggested_fix": "Call queryClient.clear() in handleLogout before navigating, and/or scope query keys by workspace_id from the token. Also clear on login when the identity changes.",
-    "failure_scenario": "User A (workspace X) logs out; user B (workspace Y) signs in within 5 minutes in the same tab. Dashboard immediately renders workspace X's cached totals and content titles, and Layout shows A's email, until refetch resolves. If B's refetch fails, workspace X's data remains displayed indefinitely."
+    "failure_scenario": "User A (workspace X) logs out; user B (workspace Y) signs in within 5 minutes in the same tab. Dashboard immediately renders workspace X's cached totals and content titles, and Layout shows A's email, until refetch resolves. If B's refetch fails, workspace X's data remains displayed indefinitely.",
+    "status": "fixed",
+    "verification_notes": "Frontend typecheck/lint/build exit 0. handleLogout calls queryClient.clear() before navigating (Layout.tsx)."
   },
   {
     "id": 31,
@@ -427,7 +429,9 @@
     "title": "JWT persisted in localStorage is readable by any XSS",
     "root_cause": "The access token is stored under 'pulse_token' in localStorage (written in Login.tsx) and attached by the request interceptor. localStorage is accessible to any script running in the origin; there is no CSP (#68) and no httpOnly-cookie alternative, so a single XSS or compromised dependency exfiltrates a token valid until exp (server-side revocation only on explicit logout).",
     "suggested_fix": "Prefer an httpOnly SameSite cookie session (or keep the access token in memory with a refresh cookie). At minimum add a strict CSP and shorten token TTL.",
-    "failure_scenario": "An XSS payload executes localStorage.getItem('pulse_token') and sends the JWT to an attacker, who can call /api/v1/* as the victim until the token expires — logout-everywhere is never triggered."
+    "failure_scenario": "An XSS payload executes localStorage.getItem('pulse_token') and sends the JWT to an attacker, who can call /api/v1/* as the victim until the token expires — logout-everywhere is never triggered.",
+    "status": "skipped",
+    "verification_notes": "httpOnly-cookie session migration is an architectural change (backend cookie auth + CSRF protection + refresh flow) beyond a minimal scoped fix. Mitigations landed this round: ephemeral dev signing keys (#53), SPA security headers (#68), existing 30-min token TTL and server-side revocation. Recommend planning the cookie migration as a dedicated task."
   },
   {
     "id": 32,
@@ -439,7 +443,9 @@
     "title": "nginx default client_max_body_size (1 MiB) rejects bulk CSV uploads the backend accepts (5 MiB); k8s ingress has the same cap",
     "root_cause": "No client_max_body_size is set in the server or /api/ location, so nginx applies its 1m default. POST /bulk-jobs allows up to MAX_UPLOAD_BYTES = 5 MiB (api/v1/bulk_jobs.py:37). The k8s ingress also has no nginx.ingress.kubernetes.io/proxy-body-size annotation (k8s/ingress.yaml), so the same 1m cap applies there.",
     "suggested_fix": "Add client_max_body_size 6m; to the server block (or /api/ location) and set nginx.ingress.kubernetes.io/proxy-body-size: \"6m\" on the ingress to match.",
-    "failure_scenario": "In compose/k8s a user uploads a 2 MiB CSV (under the backend's 5 MiB limit): nginx/ingress returns 413 before the request reaches pulse-api; the UI shows a generic 413 error and no job is created."
+    "failure_scenario": "In compose/k8s a user uploads a 2 MiB CSV (under the backend's 5 MiB limit): nginx/ingress returns 413 before the request reaches pulse-api; the UI shows a generic 413 error and no job is created.",
+    "status": "fixed",
+    "verification_notes": "nginx server block sets client_max_body_size 6m; ingress gets proxy-body-size: 6m annotation. Matches API's 5 MiB limit."
   },
   {
     "id": 33,
@@ -451,7 +457,9 @@
     "title": "Default 60s proxy_read_timeout truncates long synchronous /generate requests",
     "root_cause": "The /api/ proxy sets no proxy_read_timeout/proxy_send_timeout, so nginx's 60s default applies. POST /generate is fully synchronous and LLM adapters allow 60s (OpenAI/Anthropic) to 120s (Ollama) per call plus circuit-breaker fallback — total backend latency can legitimately exceed 60s. The axios client sets no timeout either.",
     "suggested_fix": "Set proxy_read_timeout 300s; proxy_send_timeout 300s; on the /api/ location (or a dedicated /api/v1/generate location), matching worst-case provider timeout + fallback.",
-    "failure_scenario": "An Ollama-backed generation takes 90s. At 60s nginx returns 504; the UI shows 'Generation failed' while the backend keeps running. The user retries, producing duplicate content and double LLM spend."
+    "failure_scenario": "An Ollama-backed generation takes 90s. At 60s nginx returns 504; the UI shows 'Generation failed' while the backend keeps running. The user retries, producing duplicate content and double LLM spend.",
+    "status": "fixed",
+    "verification_notes": "nginx /api/ location sets proxy_read_timeout/proxy_send_timeout 300s (covers 120s Ollama + fallback)."
   },
   {
     "id": 34,
@@ -463,7 +471,9 @@
     "title": "crypto.randomUUID() crashes the Experiments page on non-secure (HTTP) origins",
     "root_cause": "crypto.randomUUID is only available in secure contexts (HTTPS or localhost). The shipped deployment topologies serve plain HTTP: docker-compose maps 5173:80 and k8s/ingress.yaml exposes http://pulse.local with no TLS (#39). newVariantDraft is called in the useState initializer, so the TypeError fires during first render.",
     "suggested_fix": "Use a fallback key generator, e.g. crypto.randomUUID?.() ?? `v-${Date.now()}-${Math.random().toString(36).slice(2)}`, or a module-level counter.",
-    "failure_scenario": "User opens http://pulse.local/experiments (k8s) or http://<server-ip>:5173/experiments (compose on a remote host): crypto.randomUUID is undefined -> TypeError in the state initializer -> whole page replaced by the ErrorBoundary screen; experiments cannot be viewed or created."
+    "failure_scenario": "User opens http://pulse.local/experiments (k8s) or http://<server-ip>:5173/experiments (compose on a remote host): crypto.randomUUID is undefined -> TypeError in the state initializer -> whole page replaced by the ErrorBoundary screen; experiments cannot be viewed or created.",
+    "status": "fixed",
+    "verification_notes": "Frontend checks exit 0. newVariantDraft uses crypto.randomUUID?.() with Date.now/Math.random fallback for non-secure contexts."
   },
   {
     "id": 35,
@@ -475,7 +485,9 @@
     "title": "Bulk job list never refreshes while jobs run asynchronously — progress appears frozen",
     "root_cause": "The ['bulk-jobs'] query has no refetchInterval, and main.tsx disables refetchOnWindowFocus globally. Jobs are processed asynchronously by pulse-worker after creation, but the only refetch triggers are component remount or the create mutation's own invalidate.",
     "suggested_fix": "Add refetchInterval: (query) => query.state.data?.some(j => j.status === 'pending' || j.status === 'running') ? 3000 : false.",
-    "failure_scenario": "User uploads a 100-row CSV and stays on the page: the row shows 'pending 0/100' indefinitely even after the worker finishes; the Download CSV button never appears until the user navigates away and back."
+    "failure_scenario": "User uploads a 100-row CSV and stays on the page: the row shows 'pending 0/100' indefinitely even after the worker finishes; the Download CSV button never appears until the user navigates away and back.",
+    "status": "fixed",
+    "verification_notes": "Frontend checks exit 0. ['bulk-jobs'] query polls every 3s while any job is pending/running (TanStack v5 refetchInterval callback)."
   },
   {
     "id": 36,
@@ -487,7 +499,9 @@
     "title": "downloadResults has no error handling — failed downloads are silent unhandled rejections",
     "root_cause": "downloadResults is an async onClick handler with no try/catch and no mutation error state. Any non-2xx (e.g. 404 when the worker's temp output was cleaned up, or 401) rejects unhandled. Additionally URL.revokeObjectURL is called synchronously right after anchor.click(), which can race the download start in some browsers (notably Firefox).",
     "suggested_fix": "Wrap in try/catch and surface the failure via setError(apiErrorMessage(...)); revoke the object URL in setTimeout(..., 0) or after the load event.",
-    "failure_scenario": "A job shows output_file set but the file was removed. Clicking 'Download CSV' produces a 404; the promise rejects unhandled (console-only), no error is shown, and the button appears to do nothing."
+    "failure_scenario": "A job shows output_file set but the file was removed. Clicking 'Download CSV' produces a 404; the promise rejects unhandled (console-only), no error is shown, and the button appears to do nothing.",
+    "status": "fixed",
+    "verification_notes": "Frontend checks exit 0. downloadResults wrapped in try/catch surfacing apiErrorMessage; revokeObjectURL deferred via setTimeout."
   },
   {
     "id": 37,
@@ -499,7 +513,9 @@
     "title": "List pages silently truncate at the backend's default 20 rows — no pagination, total discarded",
     "root_cause": "GET /content defaults to limit=20 (max 100) and returns {items, total}, but fetchContent keeps only items and the page renders no pager or 'showing X of Y' indicator. The identical pattern exists in BulkJobs.tsx:6-10 and Experiments.tsx:12-16.",
     "suggested_fix": "Read total from the ListResponse and add offset-based pagination (or useInfiniteQuery), requesting explicit limit/offset params.",
-    "failure_scenario": "A workspace has 50 content pieces: the Content page shows only the first 20 with no indication more exist; pieces 21-50 are unreachable through the UI (same for bulk jobs and experiments beyond 20)."
+    "failure_scenario": "A workspace has 50 content pieces: the Content page shows only the first 20 with no indication more exist; pieces 21-50 are unreachable through the UI (same for bulk jobs and experiments beyond 20).",
+    "status": "fixed",
+    "verification_notes": "Frontend checks exit 0. ContentList/BulkJobs/Experiments fetch explicit limit/offset, keep total, render Showing X-Y of N + Previous/Next pager; query keys offset-scoped, invalidation prefix-matches."
   },
   {
     "id": 38,
@@ -511,7 +527,9 @@
     "title": "Example Secret is incompatible with the shipped ConfigMap: applying k8s/ as-is makes the API refuse to start",
     "root_cause": "secrets.example.yaml ships PULSE_SECRET_KEY='change-me-in-production' and WEBHOOK_SIGNING_SECRET='whsec_change_me', while k8s/configmap.yaml sets PULSE_ENV='production'. create_app() raises RuntimeError in production when either secret equals its default. The file header claims it is 'for local/dev clusters' but nothing in the manifests runs the app in development mode.",
     "suggested_fix": "Provide a dev overlay with PULSE_ENV=development, or make the example values obviously non-default placeholders with a clear README step; at minimum document that applying secrets.example.yaml unchanged guarantees CrashLoopBackOff.",
-    "failure_scenario": "Operator copies secrets.example.yaml to secrets.yaml and applies k8s/*.yaml without editing values -> create_app() raises 'Refusing to start in production with default secrets' -> pulse-api CrashLoopBackOff."
+    "failure_scenario": "Operator copies secrets.example.yaml to secrets.yaml and applies k8s/*.yaml without editing values -> create_app() raises 'Refusing to start in production with default secrets' -> pulse-api CrashLoopBackOff.",
+    "status": "fixed",
+    "verification_notes": "secrets.example.yaml header now documents required copy/replace/apply steps and that unchanged values intentionally CrashLoopBackOff via the production guard (fail-closed kept). REDIS_PASSWORD key added."
   },
   {
     "id": 39,
@@ -523,7 +541,9 @@
     "title": "Ingress has no TLS section; login credentials and JWTs travel in plaintext",
     "root_cause": "spec contains only rules, no tls block and no cert-manager/ssl-redirect annotations. The ingress routes /api (auth login/register, bearer tokens) and the SPA over plain HTTP. Also enables #34 (secure-context APIs unavailable).",
     "suggested_fix": "Add a spec.tls entry with a certificate (cert-manager annotation or pre-provisioned secret) and an nginx.ingress.kubernetes.io/ssl-redirect annotation.",
-    "failure_scenario": "Deploy as-is -> user logs in at http://pulse.local -> password and access_token sent unencrypted, capturable by any on-path observer; tokens replayable for their full lifetime."
+    "failure_scenario": "Deploy as-is -> user logs in at http://pulse.local -> password and access_token sent unencrypted, capturable by any on-path observer; tokens replayable for their full lifetime.",
+    "status": "skipped",
+    "verification_notes": "Requires a certificate-provisioning decision (cert-manager issuer vs pre-provisioned secret) that belongs to the operator. Added a ready-to-enable commented tls block + cert-manager/ssl-redirect annotation template in k8s/ingress.yaml; enabling without a valid cert would serve the controller's default self-signed cert. Related: #34 fallback makes the UI work over HTTP meanwhile."
   },
   {
     "id": 40,
@@ -535,7 +555,9 @@
     "title": "Redis runs as an ephemeral, unauthenticated Deployment; a pod restart wipes token-revocation markers and bulk-job stream state",
     "root_cause": "Redis is a Deployment with no volume/PVC and no requirepass/AUTH, and there are no NetworkPolicy manifests. auth/revocation.py stores the jti blocklist and logout-everywhere cutoffs only in this Redis, and the bulk-job stream/consumer-group state lives here too.",
     "suggested_fix": "Use a StatefulSet with a PVC (or enable AOF/RDB on a mounted volume), set requirepass via a Secret and reference it in REDIS_URL, and add a NetworkPolicy restricting access to pulse-api/worker/scheduler.",
-    "failure_scenario": "Redis pod restarted (node drain, OOM at 512Mi) -> all pulse:revoked:* keys vanish -> previously logged-out JWTs pass is_token_revoked() again until natural expiry (auth bypass window); in-flight stream messages and PEL state lost. Any pod in the namespace can also read/flush all data unauthenticated."
+    "failure_scenario": "Redis pod restarted (node drain, OOM at 512Mi) -> all pulse:revoked:* keys vanish -> previously logged-out JWTs pass is_token_revoked() again until natural expiry (auth bypass window); in-flight stream messages and PEL state lost. Any pod in the namespace can also read/flush all data unauthenticated.",
+    "status": "fixed",
+    "verification_notes": "YAML validated. redis.yaml now StatefulSet + 2Gi PVC + AOF + requirepass (secretKeyRef); NetworkPolicy restricts 6379 to pulse app pods; REDIS_PASSWORD added to secrets.example; REDIS_URL in all 3 app manifests interpolates the password via env-list secretKeyRef. Live cluster apply pending."
   },
   {
     "id": 41,
@@ -907,7 +929,9 @@
     "title": "No security headers (CSP, X-Frame-Options, X-Content-Type-Options) on the SPA",
     "root_cause": "The nginx server block adds no security headers and index.html has no CSP meta. Combined with the localStorage-stored JWT (#31), this leaves the app clickjackable and gives XSS no defense-in-depth containment.",
     "suggested_fix": "Add X-Content-Type-Options nosniff, X-Frame-Options DENY, and a Content-Security-Policy tuned for the Vite bundle and API origin to the server block.",
-    "failure_scenario": "An attacker iframes the Pulse UI on a malicious page and clickjacks an authenticated user into clicking 'Delete' on a webhook or 'Stop' on a running experiment; no frame-busting header prevents it."
+    "failure_scenario": "An attacker iframes the Pulse UI on a malicious page and clickjacks an authenticated user into clicking 'Delete' on a webhook or 'Stop' on a running experiment; no frame-busting header prevents it.",
+    "status": "fixed",
+    "verification_notes": "nginx adds X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy (always). Full CSP deferred pending Vite bundle/API origin tuning."
   },
   {
     "id": 69,
@@ -1315,6 +1339,8 @@
     "title": ".gitignore ignores venv/ and env/ but not .venv/ — the directory name the project's own setup instructions use",
     "root_cause": "CLAUDE.md documents 'source .venv/bin/activate', but the Python section of .gitignore lists only venv/ and env/. Nothing is mis-committed today, but a future git add -A could stage the entire virtualenv.",
     "suggested_fix": "Add '.venv/' to the Python section of .gitignore.",
-    "failure_scenario": "Contributor follows CLAUDE.md, creates .venv/, runs git add -A -> thousands of virtualenv files staged/committed, bloating the repo and leaking local paths."
+    "failure_scenario": "Contributor follows CLAUDE.md, creates .venv/, runs git add -A -> thousands of virtualenv files staged/committed, bloating the repo and leaking local paths.",
+    "status": "fixed",
+    "verification_notes": ".gitignore now ignores .venv/ (the name CLAUDE.md setup uses) and k8s/secrets.yaml."
   }
 ]

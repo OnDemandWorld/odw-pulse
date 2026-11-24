@@ -113,19 +113,19 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#29 — Unbounded event batch ingestion + full-table event load in results (OOM)** (`services/experiment_service.py:350-356`) — SQL aggregation; cap batch size. Amplifiable via #12.
 
 ### Frontend
-- [ ] **#30 — Logout doesn't clear TanStack Query cache; cross-workspace data bleed on next login** (`components/Layout.tsx:18-29`) — `queryClient.clear()`; workspace-scoped keys.
+- [x] **#30 — Logout doesn't clear TanStack Query cache; cross-workspace data bleed on next login** (`components/Layout.tsx:18-29`) — `queryClient.clear()`; workspace-scoped keys.
 - [ ] **#31 — JWT in localStorage readable by any XSS** (`api/client.ts:13-24`) — httpOnly cookie or in-memory token; CSP (#68); shorter TTL.
-- [ ] **#32 — nginx default 1 MiB body cap rejects 5 MiB CSVs the backend accepts; ingress same** (`nginx.conf.template:15-22`) — `client_max_body_size 6m` + ingress `proxy-body-size` annotation.
-- [ ] **#33 — nginx default 60s proxy_read_timeout truncates long /generate requests** (`nginx.conf.template:16-21`) — raise to 300s; retries cause duplicate spend.
-- [ ] **#34 — crypto.randomUUID() crashes Experiments page on HTTP origins (both shipped topologies)** (`pages/Experiments.tsx:35-37`) — fallback key generator.
-- [ ] **#35 — Bulk job list never polls; progress appears frozen** (`pages/BulkJobs.tsx:37-40`) — refetchInterval while jobs active.
-- [ ] **#36 — downloadResults: silent unhandled rejections + revokeObjectURL race** (`pages/BulkJobs.tsx:70-80`) — try/catch + surface error; defer revoke.
-- [ ] **#37 — Content/BulkJobs/Experiments lists silently truncate at 20 rows; total discarded** (`pages/ContentList.tsx:6-10`) — pagination UI.
+- [x] **#32 — nginx default 1 MiB body cap rejects 5 MiB CSVs the backend accepts; ingress same** (`nginx.conf.template:15-22`) — `client_max_body_size 6m` + ingress `proxy-body-size` annotation.
+- [x] **#33 — nginx default 60s proxy_read_timeout truncates long /generate requests** (`nginx.conf.template:16-21`) — raise to 300s; retries cause duplicate spend.
+- [x] **#34 — crypto.randomUUID() crashes Experiments page on HTTP origins (both shipped topologies)** (`pages/Experiments.tsx:35-37`) — fallback key generator.
+- [x] **#35 — Bulk job list never polls; progress appears frozen** (`pages/BulkJobs.tsx:37-40`) — refetchInterval while jobs active.
+- [x] **#36 — downloadResults: silent unhandled rejections + revokeObjectURL race** (`pages/BulkJobs.tsx:70-80`) — try/catch + surface error; defer revoke.
+- [x] **#37 — Content/BulkJobs/Experiments lists silently truncate at 20 rows; total discarded** (`pages/ContentList.tsx:6-10`) — pagination UI.
 
 ### Deployment / infra
-- [ ] **#38 — secrets.example.yaml defaults trip the production guard in configmap → CrashLoopBackOff** (`k8s/secrets.example.yaml:14-23`) — dev overlay or documented placeholder flow.
+- [x] **#38 — secrets.example.yaml defaults trip the production guard in configmap → CrashLoopBackOff** (`k8s/secrets.example.yaml:14-23`) — dev overlay or documented placeholder flow.
 - [ ] **#39 — Ingress has no TLS; credentials and JWTs in plaintext** (`k8s/ingress.yaml:8-26`) — tls block + ssl-redirect; also unblocks #34.
-- [ ] **#40 — Redis: ephemeral, unauthenticated Deployment; restart wipes revocation markers + stream state** (`k8s/redis.yaml:16-37`) — StatefulSet+PVC, requirepass, NetworkPolicy.
+- [x] **#40 — Redis: ephemeral, unauthenticated Deployment; restart wipes revocation markers + stream state** (`k8s/redis.yaml:16-37`) — StatefulSet+PVC, requirepass, NetworkPolicy.
 - [x] **#41 — Tenant-isolation test never attempts cross-workspace access (vacuous)** (`tests/test_auth.py:86-133`) — request A's resources with B's token; assert 404/empty.
 
 ### Worker / integrations / experiments core
@@ -184,7 +184,7 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 ### Frontend
 - [ ] **#66 — Webhook deleteMutation has no onError; failures invisible** (`pages/Settings.tsx:52-59`)
 - [ ] **#67 — BulkJobStatus type omits 'paused'** (`types/index.ts:89`)
-- [ ] **#68 — No security headers (CSP/X-Frame-Options/nosniff) on the SPA** (`nginx.conf.template:1-23`)
+- [x] **#68 — No security headers (CSP/X-Frame-Options/nosniff) on the SPA** (`nginx.conf.template:1-23`)
 
 ### Infra / config / tests
 - [ ] **#69 — Compose publishes unauthenticated Redis + default-cred Postgres/MinIO on all host interfaces** (`docker-compose.yml:18-26`)
@@ -199,7 +199,7 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [ ] **#79 — Storage test's mock transport masks the unauthenticated S3 request** (`tests/test_integrations.py:73-92`)
 - [ ] **#80 — In-process fallback test relies on a 50ms sleep (flaky)** (`tests/test_worker_pipeline.py:66-72`)
 - [ ] **#81 — conftest builds a private FastAPI app, not create_app(); production wiring untested** (`tests/conftest.py:203-258`)
-- [ ] **#102 — .gitignore missing .venv/ (the name CLAUDE.md's setup uses)** (`.gitignore:26-28`)
+- [x] **#102 — .gitignore missing .venv/ (the name CLAUDE.md's setup uses)** (`.gitignore:26-28`)
 
 ---
 

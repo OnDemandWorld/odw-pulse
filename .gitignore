@@ -25,12 +25,16 @@ __pycache__/
 *$py.class
 .Python
 venv/
+.venv/
 env/
 
 # Environment
 .env
 .env.local
 .env.*.local
+
+# Real cluster secrets (only the .example template is checked in)
+k8s/secrets.yaml
 
 # Build outputs
 dist/
