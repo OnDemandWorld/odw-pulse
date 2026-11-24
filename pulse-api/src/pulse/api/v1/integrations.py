@@ -76,7 +76,7 @@ async def create_webhook(
 ) -> WebhookRead:
     """Register a new webhook config for the authenticated workspace."""
     try:
-        validate_webhook_url(data.url)
+        await validate_webhook_url(data.url)
     except WebhookURLBlockedError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
@@ -149,7 +149,7 @@ async def test_webhook(
     # Re-validate at dispatch time: configs created before the SSRF guard
     # existed must not become an attack vector.
     try:
-        validate_webhook_url(config.url)
+        await validate_webhook_url(config.url)
     except WebhookURLBlockedError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)

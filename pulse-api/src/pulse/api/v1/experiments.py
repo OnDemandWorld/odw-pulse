@@ -161,33 +161,43 @@ async def update_experiment(
     experiment.hypothesis = data.hypothesis
     experiment.configuration = data.configuration
 
-    # Replace variants
+    # Update variants in place (audit finding #55): deleting and recreating
+    # every variant nulls performance_events.variant_id (ON DELETE SET NULL)
+    # and silently destroys telemetry attribution. Keep the ids of variants
+    # whose names survive; only remove variants that are actually gone.
     from datetime import UTC, datetime
 
-    from sqlalchemy import delete
+    from sqlalchemy import select as _select
 
     from pulse.models.experiment import ExperimentVariant
 
-    await db.execute(
-        delete(ExperimentVariant).where(
+    existing_result = await db.execute(
+        _select(ExperimentVariant).where(
             ExperimentVariant.experiment_id == experiment_id
         )
     )
+    existing = {v.name: v for v in existing_result.scalars()}
+    new_names = {v.name for v in data.variants}
+    for name, old_variant in existing.items():
+        if name not in new_names:
+            await db.delete(old_variant)
 
     for position, variant_data in enumerate(data.variants):
-        variant = ExperimentVariant(
-            id=uuid.uuid4(),
-            experiment_id=experiment.id,
-            name=variant_data.name,
-            weight=variant_data.weight,
-            # Persist is_control (audit finding #54), same as create path.
-            configuration={
-                **(variant_data.configuration or {}),
-                "is_control": variant_data.is_control,
-            },
-            position=position,
-        )
-        db.add(variant)
+        variant = existing.get(variant_data.name)
+        if variant is None:
+            variant = ExperimentVariant(
+                id=uuid.uuid4(),
+                experiment_id=experiment.id,
+                name=variant_data.name,
+            )
+            db.add(variant)
+        variant.weight = variant_data.weight
+        # Persist is_control (audit finding #54), same as create path.
+        variant.configuration = {
+            **(variant_data.configuration or {}),
+            "is_control": variant_data.is_control,
+        }
+        variant.position = position
 
     experiment.updated_at = datetime.now(UTC)
     await db.commit()

@@ -86,51 +86,41 @@ async def test_protected_endpoint_with_invalid_token_returns_401(
 @pytest.mark.anyio
 async def test_workspace_isolation_user_cannot_access_other_workspace(
     client: AsyncClient,
+    authorized_client: AsyncClient,
     test_workspace_and_user,
 ) -> None:
-    """A token scoped to workspace A cannot be used to access workspace B.
+    """A token scoped to workspace B cannot read workspace A's resources.
 
-    The ``require_workspace`` dependency compares the JWT workspace_id against
-    the workspace_id in the URL path.  We simulate a workspace-scoped endpoint
-    by hitting /me (which reflects the token's workspace) and verifying that
-    two different tokens carry different workspace contexts.
+    Audit finding #41: the previous version only checked that /me echoes
+    each token's own workspace — it never attempted cross-workspace access.
+    This version creates a real resource in workspace A and requests it
+    with a workspace-B token (same user id, different workspace claim).
     """
-    workspace_a = uuid.UUID("00000000-0000-0000-0000-000000000002")
+    # Create a resource in workspace A (the fixture workspace).
+    response = await authorized_client.post(
+        "/api/v1/content",
+        json={"slug": "isolation-probe", "title": "Workspace A secret"},
+    )
+    assert response.status_code == 201
+    content_id = response.json()["id"]
+
     workspace_b = uuid.UUID("00000000-0000-0000-0000-000000000099")
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-    token_a = create_access_token(
-        user_id=user_id,
-        email="alice@workspace-a.com",
-        workspace_id=workspace_a,
-        role="editor",
-    )
     token_b = create_access_token(
-        user_id=user_id,
-        email="alice@workspace-a.com",
+        user_id=TEST_USER_ID,
+        email=TEST_EMAIL,
         workspace_id=workspace_b,
-        role="editor",
+        role="owner",
     )
+    headers_b = {"Authorization": f"Bearer {token_b}"}
 
-    response_a = await client.get(
-        "/api/v1/auth/me",
-        headers={"Authorization": f"Bearer {token_a}"},
-    )
-    response_b = await client.get(
-        "/api/v1/auth/me",
-        headers={"Authorization": f"Bearer {token_b}"},
-    )
+    # Direct fetch of A's resource with B's token must 404.
+    response = await client.get(f"/api/v1/content/{content_id}", headers=headers_b)
+    assert response.status_code == 404
 
-    assert response_a.status_code == 200
-    assert response_b.status_code == 200
-
-    data_a = response_a.json()
-    data_b = response_b.json()
-
-    # Each token reflects its own workspace — confirming isolation.
-    assert data_a["workspace_id"] == str(workspace_a)
-    assert data_b["workspace_id"] == str(workspace_b)
-    assert data_a["workspace_id"] != data_b["workspace_id"]
+    # Listing with B's token must not leak A's items.
+    response = await client.get("/api/v1/content", headers=headers_b)
+    assert response.status_code == 200
+    assert all(item["id"] != content_id for item in response.json()["items"])
 
 
 # ---------------------------------------------------------------------------

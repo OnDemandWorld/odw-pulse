@@ -873,3 +873,62 @@ async def test_event_batch_rejects_oversized_payload(
         "/api/v1/performance-events/batch", json={"events": events}
     )
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #55 — updating variants preserves event attribution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_update_experiment_preserves_variant_ids_and_events(
+    async_session: AsyncSession,
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+    from pulse.models.performance_event import PerformanceEvent
+
+    svc = ExperimentService()
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        data=ExperimentCreate(
+            name="Update preserves events",
+            variants=[
+                ExperimentVariantCreate(name="control", weight=0.5, is_control=True),
+                ExperimentVariantCreate(name="treatment", weight=0.5),
+            ],
+        ),
+    )
+    control_id = exp.variants[0].id
+    await svc.ingest_event(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        experiment_id=exp.id,
+        variant_id=control_id,
+        event_type="conversion",
+        visitor_hash="v1",
+    )
+
+    # Rename one variant, keep "control"; add a new one.
+    response = await authorized_client.put(
+        f"/api/v1/experiments/{exp.id}",
+        json={
+            "name": "Update preserves events",
+            "variants": [
+                {"name": "control", "weight": 0.4, "is_control": True},
+                {"name": "treatment_v2", "weight": 0.3},
+                {"name": "treatment_v3", "weight": 0.3},
+            ],
+        },
+    )
+    assert response.status_code == 200
+
+    # The surviving variant keeps its id, so the event stays attributed.
+    event = (
+        await async_session.execute(
+            select(PerformanceEvent).where(PerformanceEvent.experiment_id == exp.id)
+        )
+    ).scalar_one()
+    assert event.variant_id == control_id

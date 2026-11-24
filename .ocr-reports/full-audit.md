@@ -126,14 +126,14 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [ ] **#38 — secrets.example.yaml defaults trip the production guard in configmap → CrashLoopBackOff** (`k8s/secrets.example.yaml:14-23`) — dev overlay or documented placeholder flow.
 - [ ] **#39 — Ingress has no TLS; credentials and JWTs in plaintext** (`k8s/ingress.yaml:8-26`) — tls block + ssl-redirect; also unblocks #34.
 - [ ] **#40 — Redis: ephemeral, unauthenticated Deployment; restart wipes revocation markers + stream state** (`k8s/redis.yaml:16-37`) — StatefulSet+PVC, requirepass, NetworkPolicy.
-- [ ] **#41 — Tenant-isolation test never attempts cross-workspace access (vacuous)** (`tests/test_auth.py:86-133`) — request A's resources with B's token; assert 404/empty.
+- [x] **#41 — Tenant-isolation test never attempts cross-workspace access (vacuous)** (`tests/test_auth.py:86-133`) — request A's resources with B's token; assert 404/empty.
 
 ### Worker / integrations / experiments core
 - [x] **#42 — Reaper fails live RUNNING jobs (progress written only every 10 rows > 10-min window)** (`worker/maintenance.py:56-69`) — time-based heartbeat; conditional final write.
 - [x] **#43 — Conversions counted per event vs unique visitors: rates >1, inflated significance** (`core/experiment/results.py:49-57`) — dedupe converting visitors; feeds #10.
 - [x] **#44 — Winner recommendation inverted with 3+ arms ("control significantly better" when treatment won)** (`core/experiment/results.py:140-160`) — evaluate the significant pair's own direction; multiple-comparison correction.
-- [ ] **#45 — SSRF guard validate-then-fetch: DNS rebinding bypass** (`integrations/webhooks/url_guard.py:72-82`) — pin the validated IP for the connection.
-- [ ] **#46 — Blocking socket.getaddrinfo on the event loop; attacker DNS stalls all requests** (`integrations/webhooks/url_guard.py:73`) — async/threaded resolution with timeout.
+- [x] **#45 — SSRF guard validate-then-fetch: DNS rebinding bypass** (`integrations/webhooks/url_guard.py:72-82`) — pin the validated IP for the connection.
+- [x] **#46 — Blocking socket.getaddrinfo on the event loop; attacker DNS stalls all requests** (`integrations/webhooks/url_guard.py:73`) — async/threaded resolution with timeout.
 - [x] **#47 — Non-atomic INCR+EXPIRE: rate-limit key can lose TTL → permanent 429 lockout of an IP** (`core/redis_kv.py:104-111`) — Lua/pipeline; defensively re-expire TTL=-1 keys.
 - [x] **#48 — Full Redis URL (with password) logged at INFO** (`worker/redis_client.py:39`, also `core/redis_kv.py:67`) — strip userinfo.
 - [x] **#49 — Bulk-job stream never trimmed (no MAXLEN/XTRIM/XDEL); unbounded Redis memory** (`worker/redis_client.py:49-54`) — approximate MAXLEN or periodic XTRIM.
@@ -144,10 +144,10 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#52 — Rate limits bypassable via spoofed leftmost X-Forwarded-For (compose exposes :8000)** (`api/ratelimit.py:33-38`) — trust configured proxy hops only; don't publish 8000; nginx overwrite XFF.
 - [x] **#53 — Fail-open defaults: known JWT key + credentialed any-origin CORS unless PULSE_ENV=production; compose never sets it** (`main.py:27-66`) — refuse default secrets in all envs; set PULSE_ENV/secret in compose.
 - [x] **#54 — Variant is_control flag silently discarded; control inferred as position 0** (`api/v1/experiments.py:176-185`) — persist and read back the flag.
-- [ ] **#55 — Updating a draft experiment nulls variant attribution of existing events (silent data loss)** (`api/v1/experiments.py:170-174`) — preserve variant ids or reject updates once events exist.
+- [x] **#55 — Updating a draft experiment nulls variant attribution of existing events (silent data loss)** (`api/v1/experiments.py:170-174`) — preserve variant ids or reject updates once events exist.
 - [x] **#56 — No role gating: viewers can approve/delete content, run bulk jobs, register webhooks** (`api/v1/content.py:184-197`) — apply the unused `require_role` dependency per operation.
 - [x] **#57 — POST /content/{id}/versions edits APPROVED content, bypassing the editorial guard** (`api/v1/content.py:298-319`) — same DRAFT/REJECTED guard as update(), or snapshot-only semantics.
-- [ ] **#58 — Upload size limit enforced only after full body spools to disk (disk-exhaustion DoS)** (`api/v1/bulk_jobs.py:74-87`) — streaming cap + proxy/server body limit.
+- [x] **#58 — Upload size limit enforced only after full body spools to disk (disk-exhaustion DoS)** (`api/v1/bulk_jobs.py:74-87`) — streaming cap + proxy/server body limit.
 
 ## LOW severity (44)
 

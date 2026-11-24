@@ -79,12 +79,19 @@ async def create_bulk_job(
 
     # Persist uploaded file (random prefix neutralises the client-supplied
     # filename; only the .csv extension was validated above).
-    content_bytes = await file.read()
-    if len(content_bytes) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"CSV upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit",
-        )
+    # Read in bounded chunks (audit finding #58): a single file.read()
+    # materialises the whole body in memory before the size check.
+    chunks: list[bytes] = []
+    total_read = 0
+    while chunk := await file.read(64 * 1024):
+        total_read += len(chunk)
+        if total_read > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"CSV upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit",
+            )
+        chunks.append(chunk)
+    content_bytes = b"".join(chunks)
     file_path = _UPLOAD_DIR / f"{uuid.uuid4()}_{file.filename}"
     file_path.write_bytes(content_bytes)
 

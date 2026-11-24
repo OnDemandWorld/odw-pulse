@@ -547,7 +547,9 @@
     "title": "The tenant-isolation test never attempts cross-workspace access; it only checks that /me echoes each token",
     "root_cause": "test_workspace_isolation_user_cannot_access_other_workspace mints two tokens for different workspace_ids and asserts /me reflects each token's own workspace. No resource in workspace A is ever requested with workspace B's token, so the test passes even if every workspace-scoped endpoint leaks data. It also silently encodes that a token for a workspace the user does not belong to is accepted with 200.",
     "suggested_fix": "Create a resource in workspace A, then request it (GET by id and list) with the workspace-B token and assert 404/empty, mirroring test_bulk_jobs.py's real isolation test; add a membership-check test once cross-workspace membership is implemented.",
-    "failure_scenario": "A regression removes workspace filtering from a content/experiment endpoint -> this 'isolation' test still passes because /me keeps echoing token claims -> cross-tenant data leak ships undetected."
+    "failure_scenario": "A regression removes workspace filtering from a content/experiment endpoint -> this 'isolation' test still passes because /me keeps echoing token claims -> cross-tenant data leak ships undetected.",
+    "status": "fixed",
+    "verification_notes": "140 tests pass. Isolation test now creates a real resource in workspace A and fetches/lists it with a workspace-B token, asserting 404/no-leak (replaces the vacuous /me-echo check)."
   },
   {
     "id": 42,
@@ -601,7 +603,9 @@
     "title": "SSRF guard is validate-then-fetch: DNS rebinding between getaddrinfo and httpx's own resolution bypasses it",
     "root_cause": "validate_webhook_url resolves the host with socket.getaddrinfo and checks the answers, but WebhookDispatcher.dispatch hands the hostname to httpx, which resolves it again at connect time. An attacker-controlled authoritative DNS can answer a public IP for the validation query and 169.254.169.254/127.0.0.1 for the connection query (TTL 0 / alternating answers). The guard is the only SSRF defense (no egress filtering); exploitable by any authenticated workspace user.",
     "suggested_fix": "Pin the validated address: resolve once, then connect to the literal IP with the original Host header (custom httpx transport/resolver returning only vetted addresses), or re-validate inside the connection hook so the checked IP is the connected IP.",
-    "failure_scenario": "POST /webhooks with url=https://rebind.attacker.tld (A record alternates public/169.254.169.254, TTL 0), then POST /webhooks/{id}/test repeatedly: validation sees the public IP, httpx connects to the metadata endpoint; internal services reachable from the server."
+    "failure_scenario": "POST /webhooks with url=https://rebind.attacker.tld (A record alternates public/169.254.169.254, TTL 0), then POST /webhooks/{id}/test repeatedly: validation sees the public IP, httpx connects to the metadata endpoint; internal services reachable from the server.",
+    "status": "fixed",
+    "verification_notes": "140 tests pass, ruff/mypy clean. Dispatcher production path resolves+validates then connects via _PinnedBackend (httpcore network_backend pinned to validated IP); TLS SNI/verification still uses URL hostname. Regression test: test_pinned_backend_connects_to_validated_ip. Live network dispatch pending Docker host."
   },
   {
     "id": 46,
@@ -613,7 +617,9 @@
     "title": "Blocking socket.getaddrinfo in async request path; attacker-controlled DNS can stall the whole event loop",
     "root_cause": "validate_webhook_url is a sync function called directly from async FastAPI handlers (api/v1/integrations.py:79, 152). getaddrinfo blocks the event loop for the full DNS resolution time, and the hostname is attacker-supplied — a deliberately slow/blackholed authoritative DNS holds every concurrent request on that replica hostage.",
     "suggested_fix": "Run resolution in a thread (asyncio.to_thread / loop.getaddrinfo) with a timeout, or make validate_webhook_url async and use the loop's resolver.",
-    "failure_scenario": "Attacker registers a webhook whose nameserver delays responses 5s: each POST /webhooks or /test call freezes the API event loop for 5s, stalling all other tenants' requests on that replica; repeatable at will."
+    "failure_scenario": "Attacker registers a webhook whose nameserver delays responses 5s: each POST /webhooks or /test call freezes the API event loop for 5s, stalling all other tenants' requests on that replica; repeatable at will.",
+    "status": "fixed",
+    "verification_notes": "140 tests pass. validate_webhook_url is async (asyncio.to_thread resolution) and returns validated IPs; both router call sites await it. Existing DNS-blocking tests updated and pass."
   },
   {
     "id": 47,
@@ -737,7 +743,9 @@
     "title": "Updating a draft experiment silently nulls variant attribution of existing events",
     "root_cause": "update_experiment bulk-deletes all ExperimentVariant rows and recreates them with new UUIDs. performance_events.variant_id FK is ON DELETE SET NULL, and ingestion never checks experiment status (#12), so DRAFT experiments can already hold events. The delete orphans those events (variant_id -> NULL); compute_results then drops them.",
     "suggested_fix": "Reject updates once events exist (or preserve variant ids for unchanged names), and/or restrict event ingestion to RUNNING experiments; at minimum warn/return the count of orphaned events.",
-    "failure_scenario": "Create draft experiment, ingest 100 events (allowed — no status check), then PUT /experiments/{id} with renamed/reordered variants -> all 100 events get variant_id=NULL and vanish from results without any error; historical telemetry silently destroyed."
+    "failure_scenario": "Create draft experiment, ingest 100 events (allowed — no status check), then PUT /experiments/{id} with renamed/reordered variants -> all 100 events get variant_id=NULL and vanish from results without any error; historical telemetry silently destroyed.",
+    "status": "fixed",
+    "verification_notes": "140 tests pass. update_experiment keeps ids of surviving variant names (in-place update), deletes only removed variants; event attribution preserved. Regression test: test_update_experiment_preserves_variant_ids_and_events."
   },
   {
     "id": 56,
@@ -777,7 +785,9 @@
     "title": "Upload size limit enforced only after the entire body is spooled to disk (disk-exhaustion DoS)",
     "root_cause": "Starlette parses the whole multipart body (file parts spool to a SpooledTemporaryFile that rolls to /tmp after 1MB) before the endpoint runs; the file.size pre-check and post-read len() check reject only after unlimited disk spooling. No request-body cap exists at the app, and compose exposes the API directly on :8000 with no proxy body limit.",
     "suggested_fix": "Enforce a streaming size cap while reading (read in chunks and abort past MAX_UPLOAD_BYTES), and/or set a server/proxy-level body limit (uvicorn/nginx client_max_body_size) on every exposed path.",
-    "failure_scenario": "Against the directly exposed compose API, an attacker streams a 20GB 'file.csv' multipart body: Starlette spools ~20GB into the container's /tmp before the endpoint returns 413 -> disk exhaustion takes down the API. Repeated requests keep the disk full via deleted-but-open spool files."
+    "failure_scenario": "Against the directly exposed compose API, an attacker streams a 20GB 'file.csv' multipart body: Starlette spools ~20GB into the container's /tmp before the endpoint returns 413 -> disk exhaustion takes down the API. Repeated requests keep the disk full via deleted-but-open spool files.",
+    "status": "fixed",
+    "verification_notes": "140 tests pass. Upload read in 64KiB chunks with running size cap (413 mid-stream). Note: Starlette multipart disk spooling is inherent; proxied paths capped by nginx (#32) and compose API now loopback-only (#52)."
   },
   {
     "id": 59,
