@@ -115,7 +115,8 @@ async def process_bulk_job(
             logger.error("Input file missing for job %s: %s", job_id, input_path)
             return "processed"
 
-        rows = _read_input_csv(input_path)
+        # Off-loop file I/O (audit finding #90).
+        rows = await asyncio.to_thread(_read_input_csv, input_path)
         await svc.update_status(
             db, jid, job.workspace_id, BulkJobStatus.RUNNING, progress=0,
         )
@@ -178,7 +179,7 @@ async def process_bulk_job(
                 last_heartbeat = time.monotonic()
 
         # ---- write output ----
-        output_path = _write_output_csv(jid, results)
+        output_path = await asyncio.to_thread(_write_output_csv, jid, results)
 
         final_status = (
             BulkJobStatus.CANCELLED

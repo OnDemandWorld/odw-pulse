@@ -1215,7 +1215,9 @@
     "title": "Blocking CSV file I/O inside the async worker loop",
     "root_cause": "_read_input_csv (and _write_output_csv at 227-231) perform synchronous file reads/writes directly in the coroutine, blocking the event loop for the duration of the I/O (up to a 5 MiB upload, larger outputs). In the in-process API fallback this stalls all concurrent HTTP requests.",
     "suggested_fix": "Wrap file reads/writes in asyncio.to_thread, or stream rows incrementally instead of materializing the whole CSV.",
-    "failure_scenario": "In-process fallback (Redis down): a 5 MiB CSV read plus a large output write on a slow disk blocks the API event loop for hundreds of milliseconds per job, stalling health checks and other tenants' requests."
+    "failure_scenario": "In-process fallback (Redis down): a 5 MiB CSV read plus a large output write on a slow disk blocks the API event loop for hundreds of milliseconds per job, stalling health checks and other tenants' requests.",
+    "status": "fixed",
+    "verification_notes": "158 tests pass. _read_input_csv/_write_output_csv run via asyncio.to_thread in the worker loop."
   },
   {
     "id": 91,
@@ -1227,7 +1229,9 @@
     "title": "New Redis connection (plus ensure_group round-trip) per enqueued job",
     "root_cause": "enqueue_job constructs a fresh RedisClient, connects, ensures the group, pushes one job, and disconnects on every call. The reaper loops enqueue_job per stale job, so a sweep of N jobs pays N connection setups and 3N round-trips.",
     "suggested_fix": "Reuse a module-level/shared client (as redis_kv does) or accept an injected client; call ensure_group once at startup rather than per enqueue.",
-    "failure_scenario": "Scheduler reaper requeues 200 backlog jobs after a Redis outage: 200 TCP+AUTH handshakes and 600 round-trips in a tight loop, slowing recovery and spiking Redis connection churn."
+    "failure_scenario": "Scheduler reaper requeues 200 backlog jobs after a Redis outage: 200 TCP+AUTH handshakes and 600 round-trips in a tight loop, slowing recovery and spiking Redis connection churn.",
+    "status": "fixed",
+    "verification_notes": "158 tests pass. dispatch keeps a shared RedisClient (connect once, ensure_group once); broken client dropped for reconnect. Regression test: test_enqueue_reuses_shared_client (1 connect for 2 enqueues)."
   },
   {
     "id": 92,
@@ -1309,7 +1313,9 @@
     "title": "Blocking file I/O (write_bytes / Path.exists) in async bulk-job endpoints",
     "root_cause": "create_bulk_job writes up to 5MiB with synchronous Path.write_bytes, and download_bulk_job_results stats the output path synchronously (line 240), both on the event loop.",
     "suggested_fix": "Use anyio.to_thread.run_sync / aiofiles for the write and existence check (or stream the upload to disk in chunks).",
-    "failure_scenario": "Several concurrent 5MiB uploads on a slow filesystem block the loop for the duration of each write, stalling all other requests including health probes."
+    "failure_scenario": "Several concurrent 5MiB uploads on a slow filesystem block the loop for the duration of each write, stalling all other requests including health probes.",
+    "status": "fixed",
+    "verification_notes": "158 tests pass, ruff/mypy clean. Upload write and download stat run via asyncio.to_thread; existing upload/download tests exercise the paths."
   },
   {
     "id": 98,
@@ -1321,7 +1327,9 @@
     "title": "Fire-and-forget asyncio.create_task without a strong reference (task may be GC'd mid-job)",
     "root_cause": "The in-process fallback task is created but never stored; asyncio only keeps weak references to tasks, so a garbage-collection pass can cancel the running bulk job. A GC'd task dies silently and the job stays RUNNING until the reaper fails it.",
     "suggested_fix": "Keep a module-level set of background tasks (add on create, discard via add_done_callback), or use a supervised task group.",
-    "failure_scenario": "Redis down at dispatch time -> fallback task created; under memory pressure a GC cycle collects the unreferenced task mid-processing -> job silently stops at partial progress and is later reaped as FAILED with no error recorded."
+    "failure_scenario": "Redis down at dispatch time -> fallback task created; under memory pressure a GC cycle collects the unreferenced task mid-processing -> job silently stops at partial progress and is later reaped as FAILED with no error recorded.",
+    "status": "fixed",
+    "verification_notes": "158 tests pass. Module-level _background_tasks set holds fallback tasks; done-callback discards. Regression test: test_fallback_task_holds_strong_reference."
   },
   {
     "id": 99,
@@ -1333,7 +1341,9 @@
     "title": "Client-supplied filename used unsanitized in filesystem path (500s on crafted names)",
     "root_cause": "Only the '.csv' suffix is checked; the raw filename is concatenated into the storage path. Names containing '/' or null bytes produce invalid/unwritable paths (nested dirs don't exist -> FileNotFoundError; '\\0' -> ValueError), surfacing as unhandled 500s. Traversal writes are blocked only incidentally by the glued UUID prefix plus missing intermediate dirs.",
     "suggested_fix": "Sanitize with Path(filename).name, strip/replace path separators and control characters, and wrap the write in try/except returning 400 cleanly.",
-    "failure_scenario": "POST /bulk-jobs with filename='a/b.csv' -> path _UPLOAD_DIR/'<uuid>_a/b.csv' -> parent dir missing -> FileNotFoundError -> 500 instead of 400; filename containing a null byte -> ValueError -> 500."
+    "failure_scenario": "POST /bulk-jobs with filename='a/b.csv' -> path _UPLOAD_DIR/'<uuid>_a/b.csv' -> parent dir missing -> FileNotFoundError -> 500 instead of 400; filename containing a null byte -> ValueError -> 500.",
+    "status": "fixed",
+    "verification_notes": "158 tests pass. Filename sanitized via Path().name + printable filter; write OSError -> 400. Regression test: test_upload_filename_with_separator_is_sanitized."
   },
   {
     "id": 100,

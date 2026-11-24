@@ -478,3 +478,42 @@ async def test_pending_delivery_counts_paginates() -> None:
     assert len(counts) == 1001
     assert counts["1000-0"] == 7
     assert stub.calls == ["-", "999-0"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #91 — dispatch reuses one Redis connection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_enqueue_reuses_shared_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pulse.worker import dispatch as dispatch_mod
+
+    connects = 0
+    pushes: list[str] = []
+
+    class _StubClient:
+        def __init__(self, redis_url: str | None = None) -> None:
+            pass
+
+        async def connect(self) -> None:
+            nonlocal connects
+            connects += 1
+
+        async def ensure_group(self, *a: Any, **k: Any) -> None:
+            pass
+
+        async def push_job(self, job_id: str, *a: Any, **k: Any) -> None:
+            pushes.append(job_id)
+
+        async def disconnect(self) -> None:
+            pass
+
+    monkeypatch.setattr(dispatch_mod, "RedisClient", _StubClient)
+    monkeypatch.setattr(dispatch_mod, "_shared_client", None)
+    monkeypatch.setattr(dispatch_mod, "_group_ready", False)
+
+    assert await dispatch_mod.enqueue_job("j1") is True
+    assert await dispatch_mod.enqueue_job("j2") is True
+    assert connects == 1
+    assert pushes == ["j1", "j2"]
