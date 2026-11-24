@@ -206,8 +206,8 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#101 — redis_kv concurrent first-request client creation leaks unclosed clients** (`core/redis_kv.py:54-71`)
 
 ### Frontend
-- [ ] **#66 — Webhook deleteMutation has no onError; failures invisible** (`pages/Settings.tsx:52-59`)
-- [ ] **#67 — BulkJobStatus type omits 'paused'** (`types/index.ts:89`)
+- [x] **#66 — Webhook deleteMutation has no onError; failures invisible** (`pages/Settings.tsx:52-59`)
+- [x] **#67 — BulkJobStatus type omits 'paused'** (`types/index.ts:89`)
 - [x] **#68 — No security headers (CSP/X-Frame-Options/nosniff) on the SPA** (`nginx.conf.template:1-23`)
 
 ### Infra / config / tests

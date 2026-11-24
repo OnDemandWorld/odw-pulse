@@ -86,7 +86,13 @@ export interface GenerateResponse {
 // Bulk jobs (schemas/bulk_job.py)
 // ---------------------------------------------------------------------------
 
-export type BulkJobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type BulkJobStatus =
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
 
 export interface BulkJob {
   id: string;

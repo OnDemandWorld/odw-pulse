@@ -919,7 +919,9 @@
     "title": "Webhook deleteMutation has no onError — delete failures are invisible",
     "root_cause": "Unlike createMutation and testMutation, deleteMutation defines only onSuccess. A failed DELETE (403/404/500/network) is stored in mutation state that the component never reads.",
     "suggested_fix": "Add onError: (err) => setFormError(apiErrorMessage(err, 'Failed to delete webhook')), and optionally disable the button while deleteMutation.isPending.",
-    "failure_scenario": "API returns 500 on DELETE /webhooks/{id}: the user clicks Delete, nothing visibly happens, and the webhook remains after the invalidate refetch — the user assumes the click missed and retries."
+    "failure_scenario": "API returns 500 on DELETE /webhooks/{id}: the user clicks Delete, nothing visibly happens, and the webhook remains after the invalidate refetch — the user assumes the click missed and retries.",
+    "status": "fixed",
+    "verification_notes": "Frontend typecheck/lint/build exit 0. deleteMutation has onError surfacing apiErrorMessage."
   },
   {
     "id": 67,
@@ -931,7 +933,9 @@
     "title": "BulkJobStatus type omits 'paused', which the backend can return",
     "root_cause": "The backend BulkJobStatus enum includes PAUSED='paused' with pause/resume endpoints, but the frontend union and BulkJobs.tsx STATUS_COLORS omit it. The ?? fallback prevents a crash, but the type lies about the API contract. Related backend drift: #21.",
     "suggested_fix": "Add 'paused' to BulkJobStatus and a corresponding entry in STATUS_COLORS; consider surfacing pause/resume actions in the UI.",
-    "failure_scenario": "A job paused via the API returns status 'paused'; TypeScript callers believe this is impossible, and the UI shows an unstyled fallback badge with no way to resume."
+    "failure_scenario": "A job paused via the API returns status 'paused'; TypeScript callers believe this is impossible, and the UI shows an unstyled fallback badge with no way to resume.",
+    "status": "fixed",
+    "verification_notes": "Frontend checks exit 0. BulkJobStatus includes 'paused'; STATUS_COLORS has amber paused badge."
   },
   {
     "id": 68,

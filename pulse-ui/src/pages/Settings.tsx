@@ -56,6 +56,10 @@ export default function Settings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['webhooks'] });
     },
+    // Audit finding #66: surface delete failures instead of silence.
+    onError: (err: unknown) => {
+      setFormError(apiErrorMessage(err, 'Failed to delete webhook'));
+    },
   });
 
   const testMutation = useMutation({
