@@ -440,7 +440,7 @@ async def test_versions_endpoint_cannot_edit_approved_content(
 
     # Editing APPROVED content via versions must be refused.
     response = await authorized_client.post(
-        f"/api/v1/content/{content_id}/versions", params={"body": "Hacked body."}
+        f"/api/v1/content/{content_id}/versions", json={"body": "Hacked body."}
     )
     assert response.status_code == 400
 
@@ -486,3 +486,63 @@ async def test_create_version_conflict_returns_409(
         await svc.create_version(async_session, content.id, TEST_WORKSPACE_ID)
     assert exc_info.value.status_code == 409
     monkeypatch.setattr(async_session, "commit", original_commit)
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #92/#93/#94 — content contract fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_content_response_serializes_metadata_not_metadata_(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content",
+        json={
+            "slug": "metadata-wire",
+            "title": "Metadata",
+            "metadata": {"k": "v"},
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["metadata"] == {"k": "v"}
+    assert "metadata_" not in data
+
+
+@pytest.mark.anyio
+async def test_versions_accepts_json_body(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content",
+        json={"slug": "json-version", "title": "V", "body": "Old body."},
+    )
+    content_id = response.json()["id"]
+
+    response = await authorized_client.post(
+        f"/api/v1/content/{content_id}/versions",
+        json={"body": "New body.", "change_note": "edit"},
+    )
+    assert response.status_code == 201
+    assert response.json()["body"] == "New body."
+
+    response = await authorized_client.get(f"/api/v1/content/{content_id}")
+    assert response.json()["body"] == "New body."
+
+
+@pytest.mark.anyio
+async def test_annotation_rejects_workflow_action_spoofing(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content", json={"slug": "spoof-probe", "title": "S"}
+    )
+    content_id = response.json()["id"]
+
+    response = await authorized_client.post(
+        f"/api/v1/content/{content_id}/annotations",
+        json={"action": "approved", "comment": "LGTM"},
+    )
+    assert response.status_code == 422

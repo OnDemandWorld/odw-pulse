@@ -32,6 +32,7 @@ from pulse.api.schemas.content import (
     ContentStatus,
     ContentUpdate,
     ContentVersionRead,
+    VersionCreate,
 )
 from pulse.api.schemas.review import (
     ApprovalChainRead,
@@ -306,16 +307,15 @@ async def create_version(
     content_id: uuid.UUID,
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
-    body: str | None = None,
-    change_note: str | None = None,
+    data: VersionCreate | None = None,
 ) -> ContentVersionRead:
     """Create a new version snapshot of the content."""
     version = await content_service.create_version(
         db=db,
         content_id=content_id,
         workspace_id=current_user.workspace_id,
-        body=body,
-        change_note=change_note,
+        body=data.body if data else None,
+        change_note=data.change_note if data else None,
         created_by=current_user.user_id,
     )
     return _version_to_read(version)

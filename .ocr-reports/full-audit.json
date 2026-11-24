@@ -1239,7 +1239,9 @@
     "title": "ContentRead/ContentVersionRead serialize 'metadata_' instead of 'metadata' (alias leaks into responses; frontend type disagrees)",
     "root_cause": "Field(alias='metadata_') sets both validation and serialization alias; FastAPI serializes response models by_alias=True by default, so the JSON key is 'metadata_' (also line 87 for ContentVersionRead). The frontend types declare 'metadata' (pulse-ui/src/types/index.ts:41,53), so the public API contract exposes the internal column name and the TS contract is untruthful.",
     "suggested_fix": "Use validation_alias=AliasChoices('metadata_', 'metadata') with serialization kept at 'metadata' (or Field(validation_alias='metadata_') plus populate_by_name); align the TS types with whichever wire key is chosen.",
-    "failure_scenario": "GET /content/{id} returns {'metadata_': {...}}; any client (including the shipped TS types) reading response.metadata gets undefined — metadata silently appears missing."
+    "failure_scenario": "GET /content/{id} returns {'metadata_': {...}}; any client (including the shipped TS types) reading response.metadata gets undefined — metadata silently appears missing.",
+    "status": "fixed",
+    "verification_notes": "155 tests pass, ruff/mypy clean. ContentRead/ContentVersionRead use validation_alias only; responses now serialize 'metadata' (matches TS types). Regression test: test_content_response_serializes_metadata_not_metadata_."
   },
   {
     "id": 93,
@@ -1251,7 +1253,9 @@
     "title": "POST /content/{id}/versions takes body/change_note as query parameters, silently ignoring a JSON body",
     "root_cause": "body and change_note are plain scalar parameters with defaults and no Body(...) annotation, so FastAPI binds them from the query string. Clients POSTing the natural JSON payload {body, change_note} are ignored without error.",
     "suggested_fix": "Declare a Pydantic request model (VersionCreate) or annotate the scalars with Body(...); document the contract.",
-    "failure_scenario": "Client POSTs /content/{id}/versions with JSON {'body': 'new text'} -> FastAPI reads body=None from query -> creates a snapshot of the OLD body and never applies the intended edit, returning 201 as if it succeeded."
+    "failure_scenario": "Client POSTs /content/{id}/versions with JSON {'body': 'new text'} -> FastAPI reads body=None from query -> creates a snapshot of the OLD body and never applies the intended edit, returning 201 as if it succeeded.",
+    "status": "fixed",
+    "verification_notes": "155 tests pass. New VersionCreate pydantic body model; JSON payload honored (query-only binding removed). Regression test: test_versions_accepts_json_body; #57 guard test updated to JSON."
   },
   {
     "id": 94,
@@ -1263,7 +1267,9 @@
     "title": "Annotation action is an unvalidated free-text field, allowing approval-chain spoofing",
     "root_cause": "ReviewAction is a bare str subclass used as a namespace, and AnnotationCreate.action accepts any string; review_service.add_annotation stores it verbatim. get_approval_chain renders these actions as workflow steps, so a user can inject 'approved'/'submitted' steps that never corresponded to a real state transition.",
     "suggested_fix": "Constrain action to a Literal/enum of annotation-safe values (e.g. 'annotated', 'commented') and reject workflow-transition actions on this endpoint.",
-    "failure_scenario": "Viewer POSTs /content/{id}/annotations {action:'approved', comment:'LGTM'} -> 201; GET /content/{id}/approval-chain shows an 'approved' step by that user although the piece is still in REVIEW, misleading auditors."
+    "failure_scenario": "Viewer POSTs /content/{id}/annotations {action:'approved', comment:'LGTM'} -> 201; GET /content/{id}/approval-chain shows an 'approved' step by that user although the piece is still in REVIEW, misleading auditors.",
+    "status": "fixed",
+    "verification_notes": "155 tests pass. AnnotationCreate.action constrained to Literal['annotated','commented']; workflow actions rejected 422. Regression test: test_annotation_rejects_workflow_action_spoofing."
   },
   {
     "id": 95,
@@ -1275,7 +1281,9 @@
     "title": "Over-broad 'does not exist' substring match fails open on user validation",
     "root_cause": "Any ProgrammingError/OperationalError whose message contains 'does not exist' (e.g. 'column users.is_active does not exist' after a partial migration) is treated as 'users table not migrated' and the token claims pass unvalidated — disabling the existence/is_active checks for deactivated or deleted users.",
     "suggested_fix": "Match only the specific undefined-table condition for the users table (SQLSTATE 42P01 / sqlite 'no such table: users'), not arbitrary substrings; fail closed (503) otherwise.",
-    "failure_scenario": "A deployment runs migration 001 but not 002 (users.is_active missing): every request with a validly signed token hits 'column ... does not exist' -> validation skipped -> a deactivated user's unexpired token keeps full access instead of 403."
+    "failure_scenario": "A deployment runs migration 001 but not 002 (users.is_active missing): every request with a validly signed token hits 'column ... does not exist' -> validation skipped -> a deactivated user's unexpired token keeps full access instead of 403.",
+    "status": "fixed",
+    "verification_notes": "155 tests pass. Fail-open limited to SQLSTATE 42P01 / 'no such table: users'; missing-column errors now 503. Regression tests: test_missing_column_error_does_not_fail_open, test_missing_users_table_still_fails_open."
   },
   {
     "id": 96,
@@ -1287,7 +1295,9 @@
     "title": "Missing/malformed JWT claims raise KeyError/ValueError -> 500 instead of 401",
     "root_cause": "After signature validation, payload['sub'], payload['workspace_id'], payload['email'], payload['role'] are accessed with [] and uuid.UUID() without try/except; a signed token lacking these claims crashes the dependency.",
     "suggested_fix": "Wrap claim extraction in try/except (KeyError, ValueError, TypeError) and raise HTTPException 401 'Invalid token claims'.",
-    "failure_scenario": "A request presents a correctly HS256-signed token whose payload lacks 'workspace_id' (foreign issuer reusing the secret) -> KeyError propagates -> 500 with stack trace in logs instead of a clean 401."
+    "failure_scenario": "A request presents a correctly HS256-signed token whose payload lacks 'workspace_id' (foreign issuer reusing the secret) -> KeyError propagates -> 500 with stack trace in logs instead of a clean 401.",
+    "status": "fixed",
+    "verification_notes": "155 tests pass. Claim extraction wrapped (KeyError/ValueError/TypeError -> 401). Regression test: test_token_missing_claims_returns_401."
   },
   {
     "id": 97,

@@ -455,3 +455,78 @@ async def test_viewer_role_cannot_write_content(
 
     response = await client.get("/api/v1/content", headers=headers)
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #95/#96 — fail-closed validation and clean 401s
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_missing_column_error_does_not_fail_open(
+    client: AsyncClient, test_workspace_and_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing COLUMN (partial migration) must 503, not skip validation."""
+    from sqlalchemy.exc import ProgrammingError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    async def _boom(self, *args, **kwargs):
+        raise ProgrammingError(
+            "SELECT ...", None, Exception("column users.is_active does not exist")
+        )
+
+    monkeypatch.setattr(AsyncSession, "execute", _boom)
+    token = create_access_token(
+        user_id=TEST_USER_ID,
+        email=TEST_EMAIL,
+        workspace_id=TEST_WORKSPACE_ID,
+        role="owner",
+    )
+    response = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_missing_users_table_still_fails_open(
+    client: AsyncClient, test_workspace_and_user, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The genuine undefined-table case keeps the pre-migration behavior."""
+    from sqlalchemy.exc import ProgrammingError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    async def _boom(self, *args, **kwargs):
+        raise ProgrammingError("SELECT ...", None, Exception("no such table: users"))
+
+    monkeypatch.setattr(AsyncSession, "execute", _boom)
+    token = create_access_token(
+        user_id=TEST_USER_ID,
+        email=TEST_EMAIL,
+        workspace_id=TEST_WORKSPACE_ID,
+        role="owner",
+    )
+    response = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_token_missing_claims_returns_401(
+    client: AsyncClient, test_workspace_and_user
+) -> None:
+    from jose import jwt
+
+    from pulse.config import get_settings
+
+    settings = get_settings()
+    token = jwt.encode(
+        {"sub": str(TEST_USER_ID), "email": TEST_EMAIL, "role": "owner"},
+        settings.pulse_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    response = await client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 401

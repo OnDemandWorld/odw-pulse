@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -54,14 +54,14 @@ class ContentUpdate(BaseModel):
 class ContentRead(BaseModel):
     """Schema for reading a content piece."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     workspace_id: uuid.UUID
     slug: str
     title: str
     body: str | None
-    metadata: dict[str, Any] | None = Field(None, alias="metadata_")
+    metadata: dict[str, Any] | None = Field(None, validation_alias="metadata_")
     status: ContentStatus
     market_code: str | None
     created_at: datetime
@@ -78,13 +78,13 @@ class ContentList(BaseModel):
 class ContentVersionRead(BaseModel):
     """Schema for reading a content version."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     content_piece_id: uuid.UUID
     version_number: int
     body: str | None
-    metadata: dict[str, Any] | None = Field(None, alias="metadata_")
+    metadata: dict[str, Any] | None = Field(None, validation_alias="metadata_")
     status: ContentStatus
     change_note: str | None
     created_at: datetime
@@ -94,6 +94,21 @@ class ContentVersionRead(BaseModel):
 class AnnotationCreate(BaseModel):
     """Schema for creating a review annotation."""
 
-    action: str = Field(default=ReviewAction.ANNOTATED, description="Action type")
+    # Audit finding #94: workflow-transition actions (approved/submitted/…)
+    # must not be injectable via annotations — they spoof the approval chain.
+    action: Literal["annotated", "commented"] = Field(
+        default="annotated", description="Annotation action (annotated or commented)"
+    )
     comment: str = Field(..., description="Annotation comment")
     metadata: dict[str, Any] | None = Field(None, description="Additional metadata")
+
+
+class VersionCreate(BaseModel):
+    """Request body for POST /content/{id}/versions (audit finding #93).
+
+    Previously body/change_note bound from the query string, silently
+    ignoring the natural JSON payload.
+    """
+
+    body: str | None = Field(None, description="Optional new content body")
+    change_note: str | None = Field(None, description="Optional change note")
