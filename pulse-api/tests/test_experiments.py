@@ -283,6 +283,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(100):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="impression",
@@ -292,6 +293,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(3):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="conversion",
@@ -301,6 +303,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(100):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="impression",
@@ -310,6 +313,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(15):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="conversion",
@@ -559,6 +563,7 @@ async def test_promote_winner(
     for i in range(50):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="impression",
@@ -568,6 +573,7 @@ async def test_promote_winner(
     for i in range(2):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="conversion",
@@ -577,6 +583,7 @@ async def test_promote_winner(
     for i in range(50):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="impression",
@@ -586,6 +593,7 @@ async def test_promote_winner(
     for i in range(10):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="conversion",
@@ -629,3 +637,76 @@ def test_chi_squared_rejects_conversions_exceeding_visitors() -> None:
     ok = chi_squared_test(10, 100, 15, 100)
     assert "error" not in ok
     assert 0.0 <= ok["p_value"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #12 — event ingestion must enforce workspace ownership
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_ingest_rejects_foreign_workspace_experiment(
+    async_session: AsyncSession,
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    """Events targeting another workspace's experiment are rejected (404)."""
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+    from pulse.models.workspace import Workspace
+
+    svc = ExperimentService()
+    other_ws_id = uuid.uuid4()
+    async_session.add(
+        Workspace(id=other_ws_id, name="Victim", slug=f"victim-{uuid.uuid4().hex[:8]}")
+    )
+    await async_session.commit()
+
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=other_ws_id,
+        data=ExperimentCreate(
+            name="Victim experiment",
+            variants=[ExperimentVariantCreate(name="control", weight=1.0)],
+        ),
+    )
+
+    response = await authorized_client.post(
+        "/api/v1/performance-events",
+        json={
+            "experiment_id": str(exp.id),
+            "variant_id": str(exp.variants[0].id),
+            "event_type": "conversion",
+            "visitor_hash": "attacker",
+        },
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_ingest_rejects_mismatched_variant(
+    async_session: AsyncSession,
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    """A variant that does not belong to the experiment is rejected (400)."""
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+
+    svc = ExperimentService()
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        data=ExperimentCreate(
+            name="Mismatch test",
+            variants=[ExperimentVariantCreate(name="control", weight=1.0)],
+        ),
+    )
+
+    response = await authorized_client.post(
+        "/api/v1/performance-events",
+        json={
+            "experiment_id": str(exp.id),
+            "variant_id": str(uuid.uuid4()),
+            "event_type": "conversion",
+        },
+    )
+    assert response.status_code == 400

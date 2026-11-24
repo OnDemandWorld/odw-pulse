@@ -149,7 +149,9 @@
     "title": "Impersonation grants any self-registered owner full access to ANY workspace",
     "root_cause": "POST /auth/impersonate only checks that the caller's token role is 'owner' and that the target workspace row exists; it never verifies membership/administration of the target. get_current_user validates only user existence/is_active, not that the token's workspace_id matches the user's DB workspace, so the minted token is accepted everywhere. Registration is open, so anyone can become an 'owner'. The audit row is written to the caller's workspace only — the victim workspace has no record. (Acknowledged as a TODO in the docstring/CLAUDE.md, but it is a live cross-tenant authz bypass, distinct from the documented RLS gap.)",
     "suggested_fix": "Require an explicit membership/admin record linking the user to the target workspace (or restrict impersonation to a platform super-admin role); write the audit event into the target workspace as well; optionally re-check workspace membership in get_current_user.",
-    "failure_scenario": "Attacker registers workspace A (becomes OWNER), obtains victim workspace B's UUID, POSTs /auth/impersonate {target_workspace_id: B} -> receives a valid owner-scoped JWT for B and can read/modify/delete all of B's content, experiments, users and webhooks."
+    "failure_scenario": "Attacker registers workspace A (becomes OWNER), obtains victim workspace B's UUID, POSTs /auth/impersonate {target_workspace_id: B} -> receives a valid owner-scoped JWT for B and can read/modify/delete all of B's content, experiments, users and webhooks.",
+    "status": "fixed",
+    "verification_notes": "110 tests pass (exit 0), ruff/mypy clean. Impersonation now requires the caller's DB user row to belong to the target workspace (403 otherwise) until cross-workspace membership exists. Regression test: test_impersonate_foreign_workspace_forbidden. Existing same-workspace impersonate tests still pass."
   },
   {
     "id": 12,
@@ -161,7 +163,9 @@
     "title": "Performance-event ingestion has no workspace/ownership check (cross-workspace write IDOR)",
     "root_cause": "ingest_performance_event and ingest_performance_events_batch pass client-supplied experiment_id/variant_id straight to ExperimentService.ingest_event/ingest_events_batch (services/experiment_service.py:266-327), which never loads the experiment, never filters by workspace_id, never checks the variant belongs to the experiment, and never checks experiment status. This is a missing service-layer tenant filter (the current isolation boundary). experiment_id is semi-public (embedded in tracking URLs, core/experiment/tracking.py). Unknown UUIDs surface as unhandled FK IntegrityErrors (500, whole batch rolled back).",
     "suggested_fix": "Pass current_user.workspace_id into both ingest methods; load the experiment scoped to the workspace (404 otherwise); verify variant.experiment_id == experiment_id and experiment status before inserting; catch IntegrityError and return 400/404 instead of 500.",
-    "failure_scenario": "An authenticated user in workspace A who learns workspace B's experiment_id (from a published tracking URL) POSTs /performance-events/batch with thousands of fake conversion events, corrupting B's experiment results and winner recommendation; a leaked variant UUID lets the attacker fabricate conversions and flip the promoted winner. Random UUIDs yield unhandled 500s."
+    "failure_scenario": "An authenticated user in workspace A who learns workspace B's experiment_id (from a published tracking URL) POSTs /performance-events/batch with thousands of fake conversion events, corrupting B's experiment results and winner recommendation; a leaked variant UUID lets the attacker fabricate conversions and flip the promoted winner. Random UUIDs yield unhandled 500s.",
+    "status": "fixed",
+    "verification_notes": "110 tests pass, ruff/mypy clean. ingest_event/ingest_events_batch take workspace_id; _validate_event_target checks experiment ownership (404) and variant<->experiment consistency (400); IntegrityError -> 400; events now store workspace_id. Regression tests: test_ingest_rejects_foreign_workspace_experiment, test_ingest_rejects_mismatched_variant."
   },
   {
     "id": 13,

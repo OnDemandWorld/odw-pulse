@@ -372,6 +372,7 @@ async def ingest_performance_event(
     """Ingest a single performance event for an experiment variant."""
     event = await _experiment_service.ingest_event(
         db=db,
+        workspace_id=current_user.workspace_id,
         experiment_id=data.experiment_id,
         variant_id=data.variant_id,
         event_type=data.event_type,
@@ -408,5 +409,7 @@ async def ingest_performance_events_batch(
         }
         for e in data.events
     ]
-    count = await _experiment_service.ingest_events_batch(db=db, events=events_data)
+    count = await _experiment_service.ingest_events_batch(
+        db=db, workspace_id=current_user.workspace_id, events=events_data
+    )
     return {"ingested": count}

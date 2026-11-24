@@ -84,9 +84,9 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
   Crash recovery destroyed: acked-but-running jobs are never retried after a crash. Heartbeat/extend claims during processing; never ack a RUNNING job you don't own.
 - [x] **#10 — Results endpoint crashes (ValueError) when conversions > unique visitors** (`pulse-api/src/pulse/core/experiment/statistics.py:58-82`)
   Negative contingency cells → `sqrt(negative)`; `asin(sqrt(p>1))` domain error. Reachable with normal server-side conversion events (no visitor_hash). Validate/clamp inputs; fix counting model (#43).
-- [ ] **#11 — Impersonation grants any self-registered owner access to ANY workspace** (`pulse-api/src/pulse/api/v1/auth.py:373-422`)
+- [x] **#11 — Impersonation grants any self-registered owner access to ANY workspace** (`pulse-api/src/pulse/api/v1/auth.py:373-422`)
   Only checks caller role + target existence; no membership check; audit written to caller's workspace only. Require membership/admin of target (or platform super-admin); audit in target workspace. *(Acknowledged TODO in docs, but a live cross-tenant bypass.)*
-- [ ] **#12 — Performance-event ingestion has no workspace/ownership check (cross-workspace write IDOR)** (`pulse-api/src/pulse/api/v1/experiments.py:363-412`)
+- [x] **#12 — Performance-event ingestion has no workspace/ownership check (cross-workspace write IDOR)** (`pulse-api/src/pulse/api/v1/experiments.py:363-412`)
   Client-supplied experiment_id/variant_id inserted verbatim; experiment IDs are semi-public via tracking URLs. Scope to caller's workspace, validate variant↔experiment, handle FK errors as 400/404.
 
 ## MEDIUM severity (46)

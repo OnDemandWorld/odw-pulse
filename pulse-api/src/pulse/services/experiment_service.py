@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.schemas.experiment import ExperimentCreate
@@ -263,9 +264,49 @@ class ExperimentService:
     # Event ingestion
     # ------------------------------------------------------------------
 
+    async def _validate_event_target(
+        self,
+        db: AsyncSession,
+        workspace_id: uuid.UUID,
+        experiment_id: uuid.UUID,
+        variant_id: uuid.UUID,
+    ) -> None:
+        """Verify experiment ownership and variant consistency (audit #12).
+
+        Without this check any authenticated user could write telemetry into
+        another workspace's experiment (cross-workspace write IDOR).
+        """
+        experiment = (
+            await db.execute(
+                select(Experiment.id).where(
+                    Experiment.id == experiment_id,
+                    Experiment.workspace_id == workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if experiment is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Experiment not found",
+            )
+        variant = (
+            await db.execute(
+                select(ExperimentVariant.id).where(
+                    ExperimentVariant.id == variant_id,
+                    ExperimentVariant.experiment_id == experiment_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if variant is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Variant does not belong to the experiment",
+            )
+
     async def ingest_event(
         self,
         db: AsyncSession,
+        workspace_id: uuid.UUID,
         experiment_id: uuid.UUID,
         variant_id: uuid.UUID,
         event_type: str,
@@ -282,8 +323,11 @@ class ExperimentService:
                 detail=f"Invalid event type: {event_type}",
             ) from err
 
+        await self._validate_event_target(db, workspace_id, experiment_id, variant_id)
+
         event = PerformanceEvent(
             id=uuid.uuid4(),
+            workspace_id=workspace_id,
             experiment_id=experiment_id,
             variant_id=variant_id,
             subject_id=visitor_hash,
@@ -293,27 +337,44 @@ class ExperimentService:
             received_at=datetime.now(UTC),
         )
         db.add(event)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Event references unknown experiment or variant",
+            ) from err
         await db.refresh(event)
         return event
 
     async def ingest_events_batch(
         self,
         db: AsyncSession,
+        workspace_id: uuid.UUID,
         events: list[dict[str, Any]],
     ) -> int:
         """Ingest a batch of performance events. Returns count inserted."""
         count = 0
+        validated: set[tuple[uuid.UUID, uuid.UUID]] = set()
         for event_data in events:
             try:
                 metric_type = PerformanceMetricType(event_data["event_type"])
             except (ValueError, KeyError):
                 continue
 
+            experiment_id = event_data["experiment_id"]
+            variant_id = event_data["variant_id"]
+            pair = (experiment_id, variant_id)
+            if pair not in validated:
+                await self._validate_event_target(db, workspace_id, experiment_id, variant_id)
+                validated.add(pair)
+
             event = PerformanceEvent(
                 id=uuid.uuid4(),
-                experiment_id=event_data["experiment_id"],
-                variant_id=event_data["variant_id"],
+                workspace_id=workspace_id,
+                experiment_id=experiment_id,
+                variant_id=variant_id,
                 subject_id=event_data.get("visitor_hash"),
                 metric_type=metric_type,
                 value=event_data.get("value", 1.0),
@@ -323,7 +384,14 @@ class ExperimentService:
             db.add(event)
             count += 1
 
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Batch references unknown experiment or variant",
+            ) from err
         return count
 
     # ------------------------------------------------------------------

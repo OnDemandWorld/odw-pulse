@@ -368,3 +368,28 @@ async def test_impersonate_requires_owner(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #11 — impersonation must not cross workspace membership
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_impersonate_foreign_workspace_forbidden(
+    async_session, authorized_client: AsyncClient, test_workspace_and_user
+) -> None:
+    """An owner cannot mint a token for a workspace they do not belong to."""
+    from pulse.models.workspace import Workspace
+
+    other = Workspace(
+        id=uuid.uuid4(), name="Other Co", slug=f"other-{uuid.uuid4().hex[:8]}"
+    )
+    async_session.add(other)
+    await async_session.commit()
+
+    response = await authorized_client.post(
+        "/api/v1/auth/impersonate",
+        json={"target_workspace_id": str(other.id)},
+    )
+    assert response.status_code == 403
