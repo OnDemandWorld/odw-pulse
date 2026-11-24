@@ -20,7 +20,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse.api.deps import CurrentUser, get_db
+from pulse.api.deps import CurrentUser, get_db, require_role
 from pulse.api.schemas.experiment import (
     ExperimentCreate,
     ExperimentList,
@@ -64,6 +64,7 @@ def _experiment_to_read(
     "/experiments",
     response_model=ExperimentRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("owner", "admin", "editor"))],
 )
 async def create_experiment(
     data: ExperimentCreate,
@@ -130,7 +131,7 @@ async def get_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.put("/experiments/{experiment_id}", response_model=ExperimentRead)
+@router.put("/experiments/{experiment_id}", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def update_experiment(
     experiment_id: uuid.UUID,
     data: ExperimentCreate,
@@ -211,7 +212,7 @@ async def update_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/experiments/{experiment_id}/start", response_model=ExperimentRead)
+@router.post("/experiments/{experiment_id}/start", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def start_experiment(
     experiment_id: uuid.UUID,
     current_user: CurrentUser,
@@ -245,7 +246,7 @@ async def start_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/experiments/{experiment_id}/pause", response_model=ExperimentRead)
+@router.post("/experiments/{experiment_id}/pause", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def pause_experiment(
     experiment_id: uuid.UUID,
     current_user: CurrentUser,
@@ -265,7 +266,7 @@ async def pause_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/experiments/{experiment_id}/stop", response_model=ExperimentRead)
+@router.post("/experiments/{experiment_id}/stop", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def stop_experiment(
     experiment_id: uuid.UUID,
     current_user: CurrentUser,
@@ -344,6 +345,7 @@ async def get_experiment_results(
 @router.post(
     "/experiments/{experiment_id}/promote-winner",
     response_model=PromoteWinnerResponse,
+    dependencies=[Depends(require_role("owner", "admin", "editor"))],
 )
 async def promote_winner(
     experiment_id: uuid.UUID,

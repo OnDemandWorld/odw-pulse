@@ -5,7 +5,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _check_password_bytes(v: str) -> str:
+    """bcrypt 5.x raises on >72 bytes; reject cleanly (audit finding #51)."""
+    if len(v.encode("utf-8")) > 72:
+        raise ValueError("password must be at most 72 bytes (bcrypt limit)")
+    return v
 
 
 class UserInToken(BaseModel):
@@ -55,6 +62,8 @@ class LoginRequest(BaseModel):
     username: str = Field(description="Account email address")
     password: str
 
+    _check_password = field_validator("password")(_check_password_bytes)
+
 
 class RegisterRequest(BaseModel):
     """Request body for the ``/auth/register`` endpoint.
@@ -66,12 +75,17 @@ class RegisterRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=8, description="At least 8 characters")
 
+    _check_password = field_validator("password")(_check_password_bytes)
+
 
 class UserCreate(BaseModel):
     """Request body for ``POST /auth/users`` (invite a user to the workspace)."""
 
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=8)
+
+    _check_password = field_validator("password")(_check_password_bytes)
+
     role: str = Field(
         default="viewer", description="One of: owner, admin, editor, viewer"
     )

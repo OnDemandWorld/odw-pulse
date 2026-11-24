@@ -681,7 +681,9 @@
     "title": "Passwords >72 bytes cause unhandled 500 on register/invite/login (bcrypt 5.0 raises)",
     "root_cause": "RegisterRequest.password and UserCreate.password enforce only min_length=8 with no upper bound. The installed bcrypt is 5.0.0 (verified in .venv), which raises ValueError('password cannot be longer than 72 bytes') instead of truncating; auth/security.py hash_password/verify_password call hashpw/checkpw directly with no length guard and no exception handling.",
     "suggested_fix": "Cap password length in the schemas (max 72 bytes, validated on the UTF-8 encoding) or pre-hash long passwords (e.g. SHA-256 base64) before bcrypt; alternatively catch ValueError and return 400/401.",
-    "failure_scenario": "POST /auth/register with a 73+ byte passphrase (common for password-manager users) -> bcrypt.hashpw raises ValueError -> unhandled 500 instead of 201/400. Login with a >72-byte password -> checkpw raises -> 500 instead of 401."
+    "failure_scenario": "POST /auth/register with a 73+ byte passphrase (common for password-manager users) -> bcrypt.hashpw raises ValueError -> unhandled 500 instead of 201/400. Login with a >72-byte password -> checkpw raises -> 500 instead of 401.",
+    "status": "fixed",
+    "verification_notes": "138 tests pass, ruff/mypy clean. Password fields (login/register/invite) validate <=72 UTF-8 bytes -> 422 instead of bcrypt 500. Regression test: test_register_rejects_overlong_password."
   },
   {
     "id": 52,
@@ -693,7 +695,9 @@
     "title": "Login/register rate limits bypassable by spoofing X-Forwarded-For",
     "root_cause": "client_ip trusts the leftmost XFF entry. The shipped compose stack publishes pulse-api directly on host port 8000, and the UI nginx proxy appends ($proxy_add_x_forwarded_for), preserving a client-supplied leftmost entry. The module docstring's precondition ('deployments must not expose the API directly') is violated by the repo's own deployment artifacts.",
     "suggested_fix": "Trust XFF only from configured proxy hops (take the rightmost untrusted entry, or use uvicorn --proxy-headers with forwarded-allow-ips); do not publish port 8000 in compose; make the UI nginx overwrite XFF with $remote_addr.",
-    "failure_scenario": "Against the compose deployment, an attacker sends POST /auth/login directly to host:8000 with 'X-Forwarded-For: 1.2.3.4' rotated per request -> each attempt gets a fresh counter key -> unlimited brute-force despite RATE_LIMIT_LOGIN_PER_MINUTE=5."
+    "failure_scenario": "Against the compose deployment, an attacker sends POST /auth/login directly to host:8000 with 'X-Forwarded-For: 1.2.3.4' rotated per request -> each attempt gets a fresh counter key -> unlimited brute-force despite RATE_LIMIT_LOGIN_PER_MINUTE=5.",
+    "status": "fixed",
+    "verification_notes": "138 tests pass. client_ip honors XFF only from trusted-proxy CIDRs (RATE_LIMIT_TRUSTED_PROXIES), taking rightmost untrusted entry; nginx overwrites XFF with $remote_addr; compose publishes API on 127.0.0.1 only. Regression test: test_client_ip_ignores_spoofed_xff_from_untrusted_peer."
   },
   {
     "id": 53,
@@ -705,7 +709,9 @@
     "title": "Fail-open defaults: known JWT signing key and credentialed any-origin CORS unless PULSE_ENV is exactly 'production'; compose never sets it",
     "root_cause": "The default-secret refusal and CORS lockdown trigger only when pulse_env == 'production'. config.py defaults pulse_env='development' and pulse_secret_key='change-me-in-production'; .env.example ships PULSE_ENV=development with the default key, and docker-compose.yml never sets PULSE_ENV (env_file .env is optional). Development mode sets allow_origin_regex='.*' with allow_credentials=True, and compose publishes port 8000 on all host interfaces.",
     "suggested_fix": "Refuse to start with default secrets in any environment unless an explicit local-dev flag is set (or generate an ephemeral random key and log loudly); default pulse_env to 'production'; set PULSE_ENV and a real secret (${PULSE_SECRET_KEY:?err}) in the compose environment block.",
-    "failure_scenario": "Operator runs docker compose up without creating .env: API signs JWTs with the committed default key -> anyone reaching port 8000 forges an owner token for any workspace/user id; any website can also make credentialed cross-origin requests because CORS echoes every origin."
+    "failure_scenario": "Operator runs docker compose up without creating .env: API signs JWTs with the committed default key -> anyone reaching port 8000 forges an owner token for any workspace/user id; any website can also make credentialed cross-origin requests because CORS echoes every origin.",
+    "status": "fixed",
+    "verification_notes": "138 tests pass. Non-production create_app replaces committed default secrets with ephemeral random values (logged warning); production guard unchanged; compose sets PULSE_ENV explicitly. Regression test: test_default_secrets_replaced_outside_production."
   },
   {
     "id": 54,
@@ -743,7 +749,9 @@
     "title": "No role gating on content/review/bulk/webhook/experiment actions: viewers can approve, delete, and generate",
     "root_cause": "UserRole defines owner/admin/editor/viewer and auth.py gates user management, but none of the content, review, bulk-job, experiment, or webhook endpoints (or their services) check current_user.role. require_role exists in api/deps.py but is never used. A user invited as 'viewer' can approve/reject content, archive pieces, create bulk generation jobs (LLM spend), and register webhooks.",
     "suggested_fix": "Apply require_role(...) per operation: approve/reject/request-changes -> admin/owner (or a dedicated reviewer role), create/update/delete/versions/bulk-jobs -> editor+, webhooks -> admin+; keep read endpoints for viewer.",
-    "failure_scenario": "Owner invites a contractor as viewer. The viewer POSTs /content/{id}/approve on REVIEW content (200, APPROVED), DELETEs any content piece, and POSTs /bulk-jobs with a 5MiB CSV to burn LLM quota — all actions the role model implies they should not have."
+    "failure_scenario": "Owner invites a contractor as viewer. The viewer POSTs /content/{id}/approve on REVIEW content (200, APPROVED), DELETEs any content piece, and POSTs /bulk-jobs with a 5MiB CSV to burn LLM quota — all actions the role model implies they should not have.",
+    "status": "fixed",
+    "verification_notes": "138 tests pass. require_role gating: content/bulk/experiment writes editor+, approve/reject/request-changes and webhook management owner/admin; reads unchanged. Regression test: test_viewer_role_cannot_write_content."
   },
   {
     "id": 57,
@@ -755,7 +763,9 @@
     "title": "POST /content/{id}/versions edits APPROVED/REVIEW content, bypassing the editorial state guard",
     "root_cause": "ContentService.update refuses edits unless status is DRAFT/REJECTED (content_service.py:138-142), but create_version applies the supplied body directly to content.body with no status check (content_service.py:210-212) while leaving content.status unchanged. The version endpoint is an unguarded write path around the review workflow.",
     "suggested_fix": "Apply the same DRAFT/REJECTED status guard in create_version when body is provided (or snapshot-only semantics: never mutate the live body from this endpoint).",
-    "failure_scenario": "Content is APPROVED (published). Any workspace member POSTs /content/{id}/versions?body=<replacement text> -> content.body overwritten while status stays APPROVED; altered content served/exported as approved without re-review. (Note: body binds from query string, see #93.)"
+    "failure_scenario": "Content is APPROVED (published). Any workspace member POSTs /content/{id}/versions?body=<replacement text> -> content.body overwritten while status stays APPROVED; altered content served/exported as approved without re-review. (Note: body binds from query string, see #93.)",
+    "status": "fixed",
+    "verification_notes": "138 tests pass. create_version refuses body edits unless DRAFT/REJECTED (same guard as update); snapshot-only versions still allowed. Regression test: test_versions_endpoint_cannot_edit_approved_content."
   },
   {
     "id": 58,

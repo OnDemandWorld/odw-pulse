@@ -10,16 +10,19 @@ Counters live in the shared :class:`~pulse.core.redis_kv.RedisKV` store,
 so all API replicas share one budget when Redis is up and fall back to
 per-process counters when it is not (fail-soft, like job dispatch).
 
-Client identity prefers the leftmost ``X-Forwarded-For`` entry — API
-replicas sit behind the nginx ingress / compose proxy, so the socket peer
-is the proxy, not the client.  This trusts the proxy to have appended the
-real client address; deployments must not expose the API directly to
-clients that can spoof the header.
+Client identity (audit finding #52): ``X-Forwarded-For`` is honored only
+when the socket peer is a configured trusted proxy
+(``RATE_LIMIT_TRUSTED_PROXIES`` CIDRs).  The rightmost *untrusted* XFF
+entry is then the real client — a client-supplied spoofed leftmost entry
+can no longer mint fresh rate-limit counters.  Direct (non-proxy)
+connections always use the socket peer.
 """
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Awaitable, Callable
+from functools import lru_cache
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request
@@ -30,12 +33,38 @@ from pulse.core.redis_kv import get_kv_store
 WINDOW_SECONDS = 60
 
 
+@lru_cache(maxsize=8)
+def _trusted_networks(cidrs: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    nets = []
+    for entry in cidrs.split(","):
+        entry = entry.strip()
+        if entry:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+    return tuple(nets)
+
+
+def _is_trusted(ip: str, networks: tuple[Any, ...]) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in networks)
+
+
 def client_ip(request: Request) -> str:
-    """Best-effort client identity: leftmost XFF entry, else the socket peer."""
+    """Client identity: rightmost untrusted XFF entry behind a trusted proxy."""
+    peer = request.client.host if request.client else "unknown"
+    networks = _trusted_networks(get_settings().rate_limit_trusted_proxies)
+    if not _is_trusted(peer, networks):
+        # Direct connection (or untrusted proxy): the header is spoofable.
+        return peer
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+        for entry in reversed(forwarded.split(",")):
+            entry = entry.strip()
+            if entry and not _is_trusted(entry, networks):
+                return entry
+    return peer
 
 
 def rate_limiter(

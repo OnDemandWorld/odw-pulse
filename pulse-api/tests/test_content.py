@@ -411,3 +411,40 @@ async def test_content_isolation_between_workspaces(
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 0  # No content visible in other workspace
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #57 — versions endpoint must obey the editorial guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_versions_endpoint_cannot_edit_approved_content(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content",
+        json={"slug": "approved-guard", "title": "Guarded", "body": "Original body."},
+    )
+    assert response.status_code == 201
+    content_id = response.json()["id"]
+
+    assert (
+        await authorized_client.post(f"/api/v1/content/{content_id}/submit")
+    ).status_code == 200
+    assert (
+        await authorized_client.post(f"/api/v1/content/{content_id}/approve")
+    ).status_code == 200
+
+    # Editing APPROVED content via versions must be refused.
+    response = await authorized_client.post(
+        f"/api/v1/content/{content_id}/versions", params={"body": "Hacked body."}
+    )
+    assert response.status_code == 400
+
+    response = await authorized_client.get(f"/api/v1/content/{content_id}")
+    assert response.json()["body"] == "Original body."
+
+    # Snapshot-only version creation (no body) is still allowed.
+    response = await authorized_client.post(f"/api/v1/content/{content_id}/versions")
+    assert response.status_code == 201

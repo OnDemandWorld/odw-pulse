@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse.api.deps import CurrentUser, get_db
+from pulse.api.deps import CurrentUser, get_db, require_role
 from pulse.integrations.webhooks.dispatcher import WebhookDispatcher
 from pulse.integrations.webhooks.url_guard import WebhookURLBlockedError, validate_webhook_url
 from pulse.models.webhook_config import WebhookConfig
@@ -68,7 +68,7 @@ class WebhookTestResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("", response_model=WebhookRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=WebhookRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role("owner", "admin"))])
 async def create_webhook(
     data: WebhookCreate,
     current_user: CurrentUser,
@@ -120,7 +120,7 @@ async def list_webhooks(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role("owner", "admin"))])
 async def delete_webhook(
     webhook_id: uuid.UUID,
     current_user: CurrentUser,
@@ -137,7 +137,7 @@ async def delete_webhook(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{webhook_id}/test", response_model=WebhookTestResult)
+@router.post("/{webhook_id}/test", response_model=WebhookTestResult, dependencies=[Depends(require_role("owner", "admin"))])
 async def test_webhook(
     webhook_id: uuid.UUID,
     current_user: CurrentUser,

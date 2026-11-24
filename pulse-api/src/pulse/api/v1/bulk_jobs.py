@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse.api.deps import CurrentUser, get_db
+from pulse.api.deps import CurrentUser, get_db, require_role
 from pulse.api.schemas.bulk_job import BulkJobConfig, BulkJobList, BulkJobRead
 from pulse.services.bulk_job_service import BulkJobService
 from pulse.worker.dispatch import enqueue_job
@@ -46,7 +46,7 @@ _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 
 
-@router.post("", response_model=BulkJobRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=BulkJobRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def create_bulk_job(
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
@@ -173,7 +173,7 @@ async def get_bulk_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{job_id}/pause", response_model=BulkJobRead)
+@router.post("/{job_id}/pause", response_model=BulkJobRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def pause_bulk_job(
     job_id: uuid.UUID,
     current_user: CurrentUser,
@@ -191,7 +191,7 @@ async def pause_bulk_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{job_id}/resume", response_model=BulkJobRead)
+@router.post("/{job_id}/resume", response_model=BulkJobRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def resume_bulk_job(
     job_id: uuid.UUID,
     current_user: CurrentUser,
@@ -209,7 +209,7 @@ async def resume_bulk_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{job_id}/cancel", response_model=BulkJobRead)
+@router.post("/{job_id}/cancel", response_model=BulkJobRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def cancel_bulk_job(
     job_id: uuid.UUID,
     current_user: CurrentUser,

@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse.api.deps import CurrentUser, get_db
+from pulse.api.deps import CurrentUser, get_db, require_role
 from pulse.api.schemas.content import (
     AnnotationCreate,
     ContentCreate,
@@ -80,7 +80,7 @@ async def list_content(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", response_model=ContentRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ContentRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def create_content(
     data: ContentCreate,
     current_user: CurrentUser,
@@ -120,7 +120,7 @@ async def get_content(
 # ---------------------------------------------------------------------------
 
 
-@router.put("/{content_id}", response_model=ContentRead)
+@router.put("/{content_id}", response_model=ContentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def update_content(
     content_id: uuid.UUID,
     data: ContentUpdate,
@@ -142,7 +142,7 @@ async def update_content(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/{content_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{content_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def delete_content(
     content_id: uuid.UUID,
     current_user: CurrentUser,
@@ -161,7 +161,7 @@ async def delete_content(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{content_id}/submit", response_model=ContentRead)
+@router.post("/{content_id}/submit", response_model=ContentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def submit_for_review(
     content_id: uuid.UUID,
     current_user: CurrentUser,
@@ -181,7 +181,7 @@ async def submit_for_review(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{content_id}/approve", response_model=ContentRead)
+@router.post("/{content_id}/approve", response_model=ContentRead, dependencies=[Depends(require_role("owner", "admin"))])
 async def approve_content(
     content_id: uuid.UUID,
     current_user: CurrentUser,
@@ -202,7 +202,7 @@ async def approve_content(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{content_id}/reject", response_model=ContentRead)
+@router.post("/{content_id}/reject", response_model=ContentRead, dependencies=[Depends(require_role("owner", "admin"))])
 async def reject_content(
     content_id: uuid.UUID,
     body: ReviewActionRequest,
@@ -225,7 +225,7 @@ async def reject_content(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{content_id}/request-changes", response_model=ContentRead)
+@router.post("/{content_id}/request-changes", response_model=ContentRead, dependencies=[Depends(require_role("owner", "admin"))])
 async def request_changes(
     content_id: uuid.UUID,
     body: ReviewActionRequest,
@@ -252,6 +252,7 @@ async def request_changes(
     "/{content_id}/annotations",
     response_model=ReviewRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("owner", "admin", "editor"))],
 )
 async def add_annotation(
     content_id: uuid.UUID,
@@ -299,6 +300,7 @@ async def list_versions(
     "/{content_id}/versions",
     response_model=ContentVersionRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("owner", "admin", "editor"))],
 )
 async def create_version(
     content_id: uuid.UUID,

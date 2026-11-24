@@ -1,5 +1,8 @@
 """Pulse FastAPI application entry point."""
 
+import logging
+import secrets
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,6 +20,8 @@ from pulse.middleware.tenant import TenantMiddleware
 # Values that must never reach production unchanged.
 _DEFAULT_SECRET_KEY = "change-me-in-production"
 _DEFAULT_WEBHOOK_SECRET = "whsec_change_me"
+
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -41,6 +46,23 @@ def create_app() -> FastAPI:
             raise RuntimeError(
                 "Refusing to start in production with default secrets: "
                 + ", ".join(insecure_defaults)
+            )
+    else:
+        # Audit finding #53: outside production, never sign tokens with the
+        # publicly known default key. Replace defaults with ephemeral random
+        # secrets (per-process, dev-only) so the shipped dev stack keeps
+        # working while token forgery with the committed key is impossible.
+        if settings.pulse_secret_key == _DEFAULT_SECRET_KEY:
+            settings.pulse_secret_key = secrets.token_urlsafe(32)
+            logger.warning(
+                "PULSE_SECRET_KEY is the committed default; generated an ephemeral "
+                "development key (tokens invalidate on restart). Set a real secret."
+            )
+        if settings.webhook_signing_secret == _DEFAULT_WEBHOOK_SECRET:
+            settings.webhook_signing_secret = "whsec_" + secrets.token_urlsafe(32)
+            logger.warning(
+                "WEBHOOK_SIGNING_SECRET is the committed default; generated an "
+                "ephemeral development secret. Set a real secret."
             )
 
     app = FastAPI(

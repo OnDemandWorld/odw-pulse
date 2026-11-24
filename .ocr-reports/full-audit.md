@@ -140,13 +140,13 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#50 — PAUSED jobs orphaned by worker crash are never recovered** (`worker/maintenance.py:56-83`) — include PAUSED in reaper recovery; ownership-aware acks.
 
 ### Auth / API
-- [ ] **#51 — Passwords >72 bytes → unhandled 500 (bcrypt 5.0 raises, no length cap)** (`auth/models.py:65-74`) — schema max-length or pre-hash; catch ValueError.
-- [ ] **#52 — Rate limits bypassable via spoofed leftmost X-Forwarded-For (compose exposes :8000)** (`api/ratelimit.py:33-38`) — trust configured proxy hops only; don't publish 8000; nginx overwrite XFF.
-- [ ] **#53 — Fail-open defaults: known JWT key + credentialed any-origin CORS unless PULSE_ENV=production; compose never sets it** (`main.py:27-66`) — refuse default secrets in all envs; set PULSE_ENV/secret in compose.
+- [x] **#51 — Passwords >72 bytes → unhandled 500 (bcrypt 5.0 raises, no length cap)** (`auth/models.py:65-74`) — schema max-length or pre-hash; catch ValueError.
+- [x] **#52 — Rate limits bypassable via spoofed leftmost X-Forwarded-For (compose exposes :8000)** (`api/ratelimit.py:33-38`) — trust configured proxy hops only; don't publish 8000; nginx overwrite XFF.
+- [x] **#53 — Fail-open defaults: known JWT key + credentialed any-origin CORS unless PULSE_ENV=production; compose never sets it** (`main.py:27-66`) — refuse default secrets in all envs; set PULSE_ENV/secret in compose.
 - [x] **#54 — Variant is_control flag silently discarded; control inferred as position 0** (`api/v1/experiments.py:176-185`) — persist and read back the flag.
 - [ ] **#55 — Updating a draft experiment nulls variant attribution of existing events (silent data loss)** (`api/v1/experiments.py:170-174`) — preserve variant ids or reject updates once events exist.
-- [ ] **#56 — No role gating: viewers can approve/delete content, run bulk jobs, register webhooks** (`api/v1/content.py:184-197`) — apply the unused `require_role` dependency per operation.
-- [ ] **#57 — POST /content/{id}/versions edits APPROVED content, bypassing the editorial guard** (`api/v1/content.py:298-319`) — same DRAFT/REJECTED guard as update(), or snapshot-only semantics.
+- [x] **#56 — No role gating: viewers can approve/delete content, run bulk jobs, register webhooks** (`api/v1/content.py:184-197`) — apply the unused `require_role` dependency per operation.
+- [x] **#57 — POST /content/{id}/versions edits APPROVED content, bypassing the editorial guard** (`api/v1/content.py:298-319`) — same DRAFT/REJECTED guard as update(), or snapshot-only semantics.
 - [ ] **#58 — Upload size limit enforced only after full body spools to disk (disk-exhaustion DoS)** (`api/v1/bulk_jobs.py:74-87`) — streaming cap + proxy/server body limit.
 
 ## LOW severity (44)

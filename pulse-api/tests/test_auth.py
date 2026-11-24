@@ -393,3 +393,75 @@ async def test_impersonate_foreign_workspace_forbidden(
         json={"target_workspace_id": str(other.id)},
     )
     assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #51/#52/#53/#56 — auth & API hardening
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_register_rejects_overlong_password(client: AsyncClient) -> None:
+    """bcrypt 5.x raises on >72 bytes; the API must return 422, not 500."""
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "workspace_name": "Long PW Co",
+            "email": "longpw@example.com",
+            "password": "x" * 73,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_client_ip_ignores_spoofed_xff_from_untrusted_peer() -> None:
+    from types import SimpleNamespace
+
+    from pulse.api.ratelimit import client_ip
+
+    # Direct public connection: spoofed header must be ignored.
+    req = SimpleNamespace(
+        headers={"x-forwarded-for": "1.2.3.4"},
+        client=SimpleNamespace(host="203.0.113.9"),
+    )
+    assert client_ip(req) == "203.0.113.9"  # type: ignore[arg-type]
+
+    # Behind a trusted (private) proxy: rightmost untrusted entry wins.
+    req = SimpleNamespace(
+        headers={"x-forwarded-for": "1.2.3.4, 198.51.100.7"},
+        client=SimpleNamespace(host="172.18.0.5"),
+    )
+    assert client_ip(req) == "198.51.100.7"  # type: ignore[arg-type]
+
+
+def test_default_secrets_replaced_outside_production() -> None:
+    from pulse.config import get_settings
+    from pulse.main import create_app
+
+    create_app()
+    settings = get_settings()
+    assert settings.pulse_secret_key != "change-me-in-production"
+    assert settings.webhook_signing_secret != "whsec_change_me"
+
+
+@pytest.mark.anyio
+async def test_viewer_role_cannot_write_content(
+    client: AsyncClient, test_workspace_and_user
+) -> None:
+    """Viewers may read but not create content (audit #56)."""
+    token = create_access_token(
+        user_id=TEST_USER_ID,
+        email=TEST_EMAIL,
+        workspace_id=TEST_WORKSPACE_ID,
+        role="viewer",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    response = await client.post(
+        "/api/v1/content",
+        json={"slug": "viewer-post", "title": "Nope"},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+    response = await client.get("/api/v1/content", headers=headers)
+    assert response.status_code == 200

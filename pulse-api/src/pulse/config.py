@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_login_per_minute: int = 5
     rate_limit_register_per_minute: int = 3
+    # Comma-separated CIDRs of trusted reverse proxies (audit finding #52).
+    # X-Forwarded-For is only honored when the socket peer is inside one of
+    # these networks; the rightmost untrusted entry is then the client.
+    rate_limit_trusted_proxies: str = (
+        "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    )
 
     # Storage
     storage_endpoint: str | None = None

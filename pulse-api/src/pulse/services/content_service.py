@@ -197,6 +197,18 @@ class ContentService:
         """Create a new version snapshot of the content."""
         content = await self.get(db, content_id, workspace_id)
 
+        # Audit finding #57: editing via the versions endpoint must obey the
+        # same editorial guard as update() — otherwise APPROVED content can
+        # be rewritten without re-review.
+        if body is not None and content.status not in (
+            ContentStatus.DRAFT,
+            ContentStatus.REJECTED,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot edit content in '{content.status.value}' status",
+            )
+
         # Determine next version number
         result = await db.execute(
             select(func.max(ContentVersion.version_number)).where(
