@@ -247,6 +247,16 @@ async def test_ingest_event_updates_variant_metrics(
         )
         assert response.status_code == 201
 
+    # Audit finding #78: verify the metrics were actually recorded, not
+    # just that ingestion returned 201.
+    response = await authorized_client.get(f"/api/v1/experiments/{exp_id}/results")
+    assert response.status_code == 200
+    by_name = {v["variant_name"]: v for v in response.json()["variant_results"]}
+    assert by_name["control"]["impressions"] == 10
+    assert by_name["control"]["conversions"] == 3
+    assert by_name["treatment"]["impressions"] == 10
+    assert by_name["treatment"]["conversions"] == 6
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/experiments/{id}/results — winner recommendation

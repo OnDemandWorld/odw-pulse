@@ -247,6 +247,23 @@ async def test_list_users_requires_admin(
     response = await authorized_client.get("/api/v1/auth/users")
     assert response.status_code == 200
 
+    # Negative path (audit finding #76): the viewer must get 403 on both
+    # user-management endpoints, not just the owner getting 200.
+    login = await authorized_client.post(
+        "/api/v1/auth/login",
+        json={"username": "viewer@example.com", "password": "viewerpass123"},
+    )
+    assert login.status_code == 200
+    viewer_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    response = await authorized_client.get("/api/v1/auth/users", headers=viewer_headers)
+    assert response.status_code == 403
+    response = await authorized_client.post(
+        "/api/v1/auth/users",
+        json={"email": "another@example.com", "password": "password123", "role": "viewer"},
+        headers=viewer_headers,
+    )
+    assert response.status_code == 403
+
 
 @pytest.mark.anyio
 async def test_list_users_returns_workspace_users(

@@ -114,8 +114,11 @@ async def test_update_content_status(
     authorized_client: AsyncClient,
     test_workspace_and_user: tuple[Any, Any],
 ) -> None:
-    """Directly updating content status via PUT should work."""
-    # Create content
+    """Status transitions actually change the persisted status (audit #77).
+
+    ContentUpdate intentionally has no status field — transitions go
+    through the review workflow; the old test never exercised any of it.
+    """
     response = await authorized_client.post(
         "/api/v1/content",
         json={
@@ -125,11 +128,21 @@ async def test_update_content_status(
         },
     )
     assert response.status_code == 201
+    content_id = response.json()["id"]
+    assert response.json()["status"] == "draft"
 
-    # Filter list by status
-    response = await authorized_client.get("/api/v1/content?status=draft")
+    response = await authorized_client.post(f"/api/v1/content/{content_id}/submit")
     assert response.status_code == 200
-    assert response.json()["total"] == 1
+    assert response.json()["status"] == "review"
+
+    response = await authorized_client.post(f"/api/v1/content/{content_id}/approve")
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+
+    # The status filter reflects the persisted transition.
+    response = await authorized_client.get("/api/v1/content?status=approved")
+    assert response.status_code == 200
+    assert any(item["id"] == content_id for item in response.json()["items"])
 
 
 # ---------------------------------------------------------------------------

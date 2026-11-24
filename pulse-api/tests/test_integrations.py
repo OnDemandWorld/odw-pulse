@@ -91,6 +91,12 @@ async def test_storage_client_upload_and_download() -> None:
     assert info["bucket"] == "pulse-test"
     assert data == b"hello-storage"
 
+    # Audit finding #79: the mock must not mask missing authentication —
+    # assert the outgoing requests are actually SigV4-signed.
+    assert len(transport.requests) == 2
+    for request in transport.requests:
+        assert request.headers.get("Authorization", "").startswith("AWS4-HMAC-SHA256")
+
 
 # ---------------------------------------------------------------------------
 # Webhook dispatcher

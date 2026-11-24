@@ -1003,7 +1003,9 @@
     "title": "'Validate deployment manifests' only checks YAML syntax, giving false confidence",
     "root_cause": "The step yaml.safe_load_all's each file and prints OK; it performs no schema/semantic validation. The broken $(POSTGRES_PASSWORD) expansion (#5), the example-secret/production-guard conflict (#38), and the missing migration step (#6) all pass this 'validation'.",
     "suggested_fix": "Add kubeconform/kubeval schema validation and a semantic check (e.g. grep for $(VAR) references not defined earlier in the same env list), or rename the step to 'YAML syntax check'.",
-    "failure_scenario": "A PR introduces a manifest that parses as YAML but cannot deploy (as the current ones do) -> CI stays green -> defect reaches the cluster."
+    "failure_scenario": "A PR introduces a manifest that parses as YAML but cannot deploy (as the current ones do) -> CI stays green -> defect reaches the cluster.",
+    "status": "fixed",
+    "verification_notes": "CI now: (1) semantic manifest check —  refs must be defined earlier in the same env list; (2) new migrations-postgres job runs alembic upgrade/downgrade/upgrade against a real PostgreSQL 16 service container. CI execution pending push."
   },
   {
     "id": 73,
@@ -1057,7 +1059,9 @@
     "title": "test_list_users_requires_admin only exercises the positive (owner) path",
     "root_cause": "The test creates a viewer user but never authenticates as that viewer; it only asserts the owner gets 201/200. The role-gating negative case (viewer/editor must get 403 on GET/POST /auth/users) is untested anywhere in the suite.",
     "suggested_fix": "Log in as the created viewer (or mint a viewer token) and assert 403 on GET /api/v1/auth/users and POST /api/v1/auth/users.",
-    "failure_scenario": "A refactor drops the admin/owner dependency from the user-management router -> suite stays green -> any viewer can enumerate and create users in the workspace."
+    "failure_scenario": "A refactor drops the admin/owner dependency from the user-management router -> suite stays green -> any viewer can enumerate and create users in the workspace.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass. test_list_users_requires_admin now logs in as the created viewer and asserts 403 on GET and POST /auth/users."
   },
   {
     "id": 77,
@@ -1069,7 +1073,9 @@
     "title": "test_update_content_status never updates a status",
     "root_cause": "Despite the name/docstring, the test only creates content and filters the list by status=draft. No PUT with a status field is issued and no status transition is asserted.",
     "suggested_fix": "PUT a status change (or remove the misleading test and rely on the review-workflow tests), and assert the returned/persisted status.",
-    "failure_scenario": "PUT /content/{id} silently ignores or mishandles the status field -> this test still passes -> status-update regression goes unnoticed."
+    "failure_scenario": "PUT /content/{id} silently ignores or mishandles the status field -> this test still passes -> status-update regression goes unnoticed.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass. test_update_content_status now exercises submit->approve transitions and asserts persisted status + filtered list (ContentUpdate has no status field by design)."
   },
   {
     "id": 78,
@@ -1081,7 +1087,9 @@
     "title": "test_ingest_event_updates_variant_metrics never checks any metric",
     "root_cause": "The test ingests 26 events and asserts only 201 on each POST; it never reads variant metrics/results to verify impressions/conversions were actually recorded.",
     "suggested_fix": "After ingestion, GET /api/v1/experiments/{id}/results and assert impression/conversion counts match the ingested numbers.",
-    "failure_scenario": "Event ingestion starts returning 201 but drops events (wrong variant_id mapping or failed commit) -> this test passes -> experiment metrics silently stay zero."
+    "failure_scenario": "Event ingestion starts returning 201 but drops events (wrong variant_id mapping or failed commit) -> this test passes -> experiment metrics silently stay zero.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass. test_ingest_event_updates_variant_metrics now GETs results and asserts impressions/conversions per variant (10/3 and 10/6)."
   },
   {
     "id": 79,
@@ -1093,7 +1101,9 @@
     "title": "Storage upload/download test uses a mock transport that masks the unauthenticated S3 request",
     "root_cause": "StorageClient.upload_file sends a plain PUT with no Authorization/SigV4 header and download_file is likewise unsigned (#85). The test queues canned 200 responses and never inspects the outgoing request for auth, so it cannot detect that real MinIO/S3 would reject every upload with 403.",
     "suggested_fix": "Assert the recorded request carries a valid signature (once implemented), or add a test against a real MinIO container; at minimum assert on transport.requests so the missing auth is visible.",
-    "failure_scenario": "Someone wires StorageClient into an export/asset flow -> tests stay green -> every upload against the compose MinIO (which requires auth) fails with 403 AccessDenied in production."
+    "failure_scenario": "Someone wires StorageClient into an export/asset flow -> tests stay green -> every upload against the compose MinIO (which requires auth) fails with 403 AccessDenied in production.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass. Storage test asserts both recorded requests carry AWS4-HMAC-SHA256 Authorization (masks nothing now that #85 signing landed)."
   },
   {
     "id": 80,

@@ -38,17 +38,86 @@ jobs:
         working-directory: pulse-api
         run: mypy src
 
-      - name: Validate deployment manifests (YAML)
+      - name: Validate deployment manifests (YAML + semantics)
         run: |
           python - <<'EOF'
           import glob
+          import re
           import yaml
 
           files = ["docker-compose.yml"] + sorted(glob.glob("k8s/*.yaml"))
           for f in files:
               docs = [d for d in yaml.safe_load_all(open(f)) if d]
               print(f"{f}: OK ({len(docs)} document(s))")
+
+          # Semantic check (audit finding #72): k8s $(VAR) expansion only
+          # resolves vars defined EARLIER in the same container env list —
+          # envFrom vars do not count. Syntax-only validation missed this.
+          def check_containers(containers, where, fname):
+              for c in containers or []:
+                  defined = set()
+                  for e in c.get("env", []):
+                      for ref in re.findall(r"\$\((\w+)\)", e.get("value", "")):
+                          if ref not in defined:
+                              raise SystemExit(
+                                  f"{fname}: {where}/{c.get('name')}: $({ref}) is not "
+                                  "defined earlier in the same env list (envFrom does "
+                                  "not participate in $(VAR) expansion)"
+                              )
+                      defined.add(e["name"])
+
+          for f in sorted(glob.glob("k8s/*.yaml")):
+              for doc in yaml.safe_load_all(open(f)):
+                  if not isinstance(doc, dict):
+                      continue
+                  spec = doc.get("spec") or {}
+                  pod = (spec.get("template") or {}).get("spec") or {}
+                  for key in ("containers", "initContainers"):
+                      check_containers(pod.get(key), key, f)
+          print("manifest semantics: OK")
           EOF
+
+  migrations-postgres:
+    name: Migrations — real PostgreSQL 16
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pulse
+          POSTGRES_PASSWORD: pulse
+          POSTGRES_DB: pulse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pulse"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pulse-api/pyproject.toml
+
+      - name: Install pulse-api
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "pulse-api[dev]"
+
+      # Audit findings #3/#6/#72: SQLite tests cannot see PostgreSQL
+      # partitioning/enum/JSONB defects — exercise the real DDL, both ways.
+      - name: alembic upgrade / downgrade / upgrade on PostgreSQL
+        working-directory: pulse-api
+        env:
+          DATABASE_URL: postgresql+asyncpg://pulse:pulse@localhost:5432/pulse
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
 
   frontend:
     name: Frontend — typecheck, lint, build
