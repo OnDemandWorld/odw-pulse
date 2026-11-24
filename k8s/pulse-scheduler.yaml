@@ -59,6 +59,16 @@ spec:
                   key: REDIS_PASSWORD
             - name: REDIS_URL
               value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+          # Heartbeat-file probe (audit finding #73): tick() touches the
+          # file every 60s; a hung scheduler stops touching it.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/pulse-scheduler-heartbeat')<180 else 1)"
+            initialDelaySeconds: 90
+            periodSeconds: 30
           resources:
             requests:
               cpu: 50m

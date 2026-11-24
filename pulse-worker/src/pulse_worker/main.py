@@ -19,6 +19,8 @@ import contextlib
 import os
 import signal
 import socket
+import time
+from pathlib import Path
 
 import structlog
 from prometheus_client import Counter, start_http_server
@@ -32,6 +34,15 @@ JOBS_TOTAL = Counter(
     "Bulk-job stream messages handled by this worker",
     ["result"],
 )
+
+# Liveness heartbeat file for the k8s exec probe (audit finding #73).
+_HEARTBEAT_PATH = Path("/tmp/pulse-worker-heartbeat")
+
+
+def _touch_heartbeat() -> None:
+    with contextlib.suppress(OSError):
+        _HEARTBEAT_PATH.write_text(str(time.time()))
+
 
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_BLOCK_MS = 5_000
@@ -157,6 +168,7 @@ class Worker:
     async def _consume_loop(self) -> None:
         """Read and process messages until shutdown is requested."""
         while not self._shutdown_event.is_set():
+            _touch_heartbeat()
             messages = await self._client.consume_jobs(
                 stream=self._stream,
                 group=self._group,

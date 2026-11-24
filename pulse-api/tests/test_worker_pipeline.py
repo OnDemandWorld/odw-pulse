@@ -573,3 +573,12 @@ async def test_kv_client_creation_is_serialized(monkeypatch: pytest.MonkeyPatch)
     results = await asyncio.gather(*(kv._client() for _ in range(10)))
     assert created == 1
     assert all(r is results[0] for r in results)
+
+
+def test_worker_heartbeat_file_written() -> None:
+    """Audit #73: the liveness probe reads this file."""
+    import time
+
+    worker_main._touch_heartbeat()
+    assert worker_main._HEARTBEAT_PATH.exists()
+    assert time.time() - float(worker_main._HEARTBEAT_PATH.read_text()) < 5

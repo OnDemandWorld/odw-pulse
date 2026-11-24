@@ -211,12 +211,12 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#68 — No security headers (CSP/X-Frame-Options/nosniff) on the SPA** (`nginx.conf.template:1-23`)
 
 ### Infra / config / tests
-- [ ] **#69 — Compose publishes unauthenticated Redis + default-cred Postgres/MinIO on all host interfaces** (`docker-compose.yml:18-26`)
-- [ ] **#70 — Makefile 'source' fails under /bin/sh (dash) on Linux** (`Makefile:27-28`)
-- [ ] **#71 — Dockerfile copies src before pip install; dependency layer caching claim false** (`pulse-api/Dockerfile:5-9`)
+- [x] **#69 — Compose publishes unauthenticated Redis + default-cred Postgres/MinIO on all host interfaces** (`docker-compose.yml:18-26`)
+- [x] **#70 — Makefile 'source' fails under /bin/sh (dash) on Linux** (`Makefile:27-28`)
+- [x] **#71 — Dockerfile copies src before pip install; dependency layer caching claim false** (`pulse-api/Dockerfile:5-9`)
 - [ ] **#72 — CI 'manifest validation' is YAML-syntax-only; broken manifests pass** (`.github/workflows/ci.yml:41-51`)
-- [ ] **#73 — Worker/scheduler Deployments have no liveness/readiness probes** (`k8s/pulse-worker.yaml:16-35`)
-- [ ] **#74 — PULSE_API_HOST/PORT advertised but consumed by nothing** (`.env.example:7-8`)
+- [x] **#73 — Worker/scheduler Deployments have no liveness/readiness probes** (`k8s/pulse-worker.yaml:16-35`)
+- [x] **#74 — PULSE_API_HOST/PORT advertised but consumed by nothing** (`.env.example:7-8`)
 - [ ] **#76 — test_list_users_requires_admin never tests the negative (viewer 403) path** (`tests/test_auth.py:240-258`)
 - [ ] **#77 — test_update_content_status never updates a status** (`tests/test_content.py:110-130`)
 - [ ] **#78 — test_ingest_event_updates_variant_metrics never checks a metric** (`tests/test_experiments.py:176-247`)

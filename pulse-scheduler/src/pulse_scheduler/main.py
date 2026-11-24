@@ -1,7 +1,10 @@
 """Pulse scheduler entry point."""
 
 import asyncio
+import contextlib
 import signal
+import time
+from pathlib import Path
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
@@ -14,8 +17,10 @@ _HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 async def tick() -> None:
-    """Placeholder scheduled task (proof-of-life log line)."""
+    """Proof-of-life log line + liveness heartbeat (audit finding #73)."""
     logger.info("pulse-scheduler.tick")
+    with contextlib.suppress(OSError):
+        Path("/tmp/pulse-scheduler-heartbeat").write_text(str(time.time()))
 
 
 async def reap_stale_bulk_jobs() -> None:

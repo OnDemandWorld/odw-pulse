@@ -70,6 +70,24 @@ spec:
               mountPath: /tmp/pulse_bulk_uploads
             - name: bulk-outputs
               mountPath: /tmp/pulse_bulk_outputs
+          # Heartbeat-file probes (audit finding #73): the consume loop
+          # touches the file every cycle; a wedged loop stops touching it.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/pulse-worker-heartbeat')<180 else 1)"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/pulse-worker-heartbeat')<180 else 1)"
+            initialDelaySeconds: 10
+            periodSeconds: 15
           resources:
             requests:
               cpu: 100m

@@ -961,7 +961,9 @@
     "title": "Compose publishes Redis (no auth), Postgres and MinIO (default credentials) on host ports",
     "root_cause": "ports mappings bind 6379, 5432 (pulse/pulse), 9000/9001 (minioadmin/minioadmin) on all host interfaces; Redis has no password at all. Fine for isolated localhost dev, but the stack is routinely run on shared/remote hosts.",
     "suggested_fix": "Bind published ports to 127.0.0.1 (e.g. '127.0.0.1:6379:6379') or drop the ports entirely since inter-service traffic uses the compose network; set a Redis password.",
-    "failure_scenario": "make dev on a shared server or untrusted LAN -> anyone reaching the host can connect to unauthenticated Redis (read revocation markers, inject/flush bulk-job stream messages) or log into Postgres/MinIO with the committed default credentials."
+    "failure_scenario": "make dev on a shared server or untrusted LAN -> anyone reaching the host can connect to unauthenticated Redis (read revocation markers, inject/flush bulk-job stream messages) or log into Postgres/MinIO with the committed default credentials.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass; YAML validated. Infra ports (postgres/redis/minio) now loopback-bound in compose; API already loopback (#52)."
   },
   {
     "id": 70,
@@ -973,7 +975,9 @@
     "title": "Makefile targets use bash-only 'source' under make's default /bin/sh",
     "root_cause": "make executes recipes with /bin/sh, which is dash on Debian/Ubuntu; 'source' is not a dash builtin. The api/worker/scheduler/test/lint/typecheck targets all use 'source .venv/bin/activate'. Works on macOS but fails on Linux dev machines.",
     "suggested_fix": "Add 'SHELL := /bin/bash' at the top of the Makefile or replace 'source' with POSIX '.'.",
-    "failure_scenario": "Linux contributor runs make test -> '/bin/sh: 1: source: not found' -> every venv-based target is unusable."
+    "failure_scenario": "Linux contributor runs make test -> '/bin/sh: 1: source: not found' -> every venv-based target is unusable.",
+    "status": "fixed",
+    "verification_notes": "Makefile sets SHELL := /bin/bash so 'source' recipes work on Linux/dash."
   },
   {
     "id": 71,
@@ -985,7 +989,9 @@
     "title": "Dependency-layer caching claim is false: src is copied before pip install",
     "root_cause": "The comment says 'Install dependencies first (without src/) to leverage layer caching', but COPY src ./src precedes RUN pip install ., so any source edit invalidates the dependency-install layer.",
     "suggested_fix": "Copy only pyproject.toml/README.md first, install dependencies, then COPY src and reinstall the local package; or use a two-stage build.",
-    "failure_scenario": "Every one-line code change triggers a full re-download/reinstall of fastapi/sqlalchemy/etc. in CI image builds and local make build, adding minutes per build."
+    "failure_scenario": "Every one-line code change triggers a full re-download/reinstall of fastapi/sqlalchemy/etc. in CI image builds and local make build, adding minutes per build.",
+    "status": "fixed",
+    "verification_notes": "pulse-api Dockerfile installs deps against a stub package first (cached layer), then copies src and reinstalls --no-deps. Build verification pending Docker host."
   },
   {
     "id": 72,
@@ -1009,7 +1015,9 @@
     "title": "Worker and scheduler Deployments define no liveness/readiness probes",
     "root_cause": "pulse-worker.yaml and pulse-scheduler.yaml containers have env/resources only. A hung process keeps the pod 'Running' forever; kubelet never restarts it. The worker's Redis-reconnect loop does not cover hangs inside job processing (e.g. the #4 deadlock).",
     "suggested_fix": "Add a liveness probe (exec check of a heartbeat file the loop touches, or an HTTP health/metrics endpoint) and a readiness signal for both Deployments.",
-    "failure_scenario": "Worker pod deadlocks on a stalled DB connection -> pod stays Ready/Running -> bulk jobs stop being consumed and only the scheduler reaper notices after the staleness window; with the scheduler itself hung, nothing recovers."
+    "failure_scenario": "Worker pod deadlocks on a stalled DB connection -> pod stays Ready/Running -> bulk jobs stop being consumed and only the scheduler reaper notices after the staleness window; with the scheduler itself hung, nothing recovers.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass; YAML validated. Worker consume loop and scheduler tick() write heartbeat files; k8s liveness/readiness exec probes check mtime<180s. Regression test: test_worker_heartbeat_file_written."
   },
   {
     "id": 74,
@@ -1021,7 +1029,9 @@
     "title": "PULSE_API_HOST / PULSE_API_PORT are advertised but read by nothing",
     "root_cause": "config.py defines pulse_api_host/pulse_api_port, but no consumer exists: the Dockerfile CMD and Makefile hardcode --host 0.0.0.0 --port 8000, and k8s/compose set the port independently.",
     "suggested_fix": "Either honor the settings in the uvicorn invocation (entrypoint script) or remove the variables from config.py/.env.example/configmap to avoid misleading operators.",
-    "failure_scenario": "Operator sets PULSE_API_PORT=9000 expecting the API to move -> container still listens on 8000 -> healthchecks/proxies pointed at 9000 fail."
+    "failure_scenario": "Operator sets PULSE_API_PORT=9000 expecting the API to move -> container still listens on 8000 -> healthchecks/proxies pointed at 9000 fail.",
+    "status": "fixed",
+    "verification_notes": "Dockerfile CMD honors PULSE_API_HOST/PULSE_API_PORT with 0.0.0.0:8000 defaults."
   },
   {
     "id": 75,
