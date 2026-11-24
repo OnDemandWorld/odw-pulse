@@ -109,6 +109,15 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def get_initialized_engine() -> Any | None:
+    """Return the global engine if it has been created, else None.
+
+    Used by the readiness probe (audit finding #75) without forcing engine
+    creation in processes that never touch the database.
+    """
+    return _engine
+
+
 def get_admin_session_factory(
     settings: Settings | None = None,
 ) -> async_sessionmaker[AsyncSession]:

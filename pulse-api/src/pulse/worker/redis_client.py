@@ -24,6 +24,10 @@ class RedisClient:
     def __init__(self, redis_url: str | None = None) -> None:
         self._redis_url = redis_url or get_settings().redis_url
         self._redis: Any = None
+        # XAUTOCLAIM cursor persisted across sweeps (audit finding #88):
+        # restarting at 0-0 with count=10 never reached stale entries behind
+        # a fresh PEL head.
+        self._claim_cursor = "0-0"
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -114,14 +118,17 @@ class RedisClient:
         """
         if self._redis is None:
             raise RuntimeError("Redis client not connected; call connect() first")
-        _next_start, claimed, _deleted = await self._redis.xautoclaim(
+        next_start, claimed, _deleted = await self._redis.xautoclaim(
             name=stream,
             groupname=group,
             consumername=consumer,
             min_idle_time=min_idle_ms,
-            start_id="0-0",
+            start_id=self._claim_cursor,
             count=count,
         )
+        # Redis returns 0-0 when the scan wrapped around; keep the cursor
+        # otherwise so the next sweep continues past the fresh PEL head.
+        self._claim_cursor = next_start if next_start != "0-0" else "0-0"
         return [(msg_id, fields) for msg_id, fields in claimed]
 
     async def extend_claim(

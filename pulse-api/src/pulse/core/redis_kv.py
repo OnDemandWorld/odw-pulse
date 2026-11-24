@@ -20,6 +20,7 @@ every request.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -70,6 +71,9 @@ class RedisKV:
         self._redis: Any = None
         self._unavailable_until = 0.0
         self._last_prune = 0.0
+        # Serialize client creation (audit finding #101): concurrent first
+        # requests otherwise built N clients and leaked N-1 open pools.
+        self._client_lock = asyncio.Lock()
         # Local fallback tables: key -> (monotonic expiry, payload)
         self._local_counts: dict[str, tuple[float, int]] = {}
         self._local_values: dict[str, tuple[float, str]] = {}
@@ -80,22 +84,29 @@ class RedisKV:
 
     async def _client(self) -> Any | None:
         """Return a live Redis client, or *None* while unavailable."""
-        now = time.monotonic()
         if self._redis is not None:
             return self._redis
-        if now < self._unavailable_until:
+        if time.monotonic() < self._unavailable_until:
             return None
-        try:
-            import redis.asyncio as aioredis
+        async with self._client_lock:
+            # Re-check under the lock: another coroutine may have connected.
+            if self._redis is not None:
+                return self._redis
+            if time.monotonic() < self._unavailable_until:
+                return None
+            try:
+                import redis.asyncio as aioredis
 
-            client = aioredis.from_url(self._redis_url, decode_responses=True)
-            await client.ping()
-            self._redis = client
-            logger.info("KV store connected to Redis at %s", redact_url(self._redis_url))
-            return client
-        except Exception as exc:  # pragma: no cover - depends on environment
-            self._mark_unavailable(exc)
-            return None
+                client = aioredis.from_url(self._redis_url, decode_responses=True)
+                await client.ping()
+                self._redis = client
+                logger.info(
+                    "KV store connected to Redis at %s", redact_url(self._redis_url)
+                )
+                return client
+            except Exception as exc:  # pragma: no cover - depends on environment
+                self._mark_unavailable(exc)
+                return None
 
     def _mark_unavailable(self, exc: BaseException) -> None:
         """Drop the client and stop re-probing for a while."""

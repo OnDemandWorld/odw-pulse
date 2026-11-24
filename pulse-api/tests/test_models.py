@@ -423,3 +423,19 @@ def test_alembic_env_escapes_percent_in_url() -> None:
 
     env_py = Path(__file__).resolve().parents[1] / "src/pulse/db/migrations/env.py"
     assert '.replace("%", "%%")' in env_py.read_text()
+
+
+def test_stdlib_logging_rendered_as_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """Audit #89: stdlib log records must be JSON like structlog records."""
+    import json
+    import logging
+
+    from pulse.core.logging import configure_logging
+
+    configure_logging("info")
+    logging.getLogger("audit89.probe").warning("hello structured world")
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out, "no log output captured"
+    record = json.loads(out[-1])
+    assert record["event"] == "hello structured world"
+    assert record["level"] == "warning"

@@ -517,3 +517,59 @@ async def test_enqueue_reuses_shared_client(monkeypatch: pytest.MonkeyPatch) -> 
     assert await dispatch_mod.enqueue_job("j2") is True
     assert connects == 1
     assert pushes == ["j1", "j2"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #88/#101 — claim cursor and client-creation lock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_claim_stale_persists_cursor() -> None:
+    from pulse.worker.redis_client import RedisClient
+
+    class _StubRedis:
+        def __init__(self) -> None:
+            self.starts: list[str] = []
+
+        async def xautoclaim(self, name: str, groupname: str, consumername: str, min_idle_time: int, start_id: str, count: int):
+            self.starts.append(start_id)
+            if start_id == "0-0":
+                return ("7-0", [], [])
+            return ("0-0", [("9-0", {"job_id": "j"})], [])
+
+    client = RedisClient(redis_url="redis://fake")
+    stub = _StubRedis()
+    client._redis = stub
+    await client.claim_stale()
+    claimed = await client.claim_stale()
+    assert stub.starts == ["0-0", "7-0"]
+    assert claimed == [("9-0", {"job_id": "j"})]
+    assert client._claim_cursor == "0-0"
+
+
+@pytest.mark.anyio
+async def test_kv_client_creation_is_serialized(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import redis.asyncio as aioredis
+
+    from pulse.core.redis_kv import RedisKV
+
+    created = 0
+
+    class _StubClient:
+        async def ping(self) -> bool:
+            await asyncio.sleep(0.01)
+            return True
+
+    def _from_url(url: str, **kwargs: Any) -> _StubClient:
+        nonlocal created
+        created += 1
+        return _StubClient()
+
+    monkeypatch.setattr(aioredis, "from_url", _from_url)
+    kv = RedisKV(redis_url="redis://fake")
+    results = await asyncio.gather(*(kv._client() for _ in range(10)))
+    assert created == 1
+    assert all(r is results[0] for r in results)

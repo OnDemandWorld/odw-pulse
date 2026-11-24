@@ -1029,7 +1029,9 @@
     "title": "Readiness endpoint always returns ok; k8s readiness probe is meaningless",
     "root_cause": "/health/ready (used by k8s/pulse-api.yaml readinessProbe) returns a static {'status':'ok'} without checking DB/Redis connectivity, so pods receive traffic while their dependencies are down.",
     "suggested_fix": "Perform a cheap SELECT 1 (and optional Redis PING) with a short timeout in readiness; return 503 on failure. Keep /health/live static.",
-    "failure_scenario": "Postgres fails over; API pods stay 'Ready' and keep receiving requests; every DB-backed call 500s instead of traffic being held until connections recover."
+    "failure_scenario": "Postgres fails over; API pods stay 'Ready' and keep receiving requests; every DB-backed call 500s instead of traffic being held until connections recover.",
+    "status": "fixed",
+    "verification_notes": "163 tests pass. /health/ready pings DB (SELECT 1, 2s timeout) once engine initialized; 503 on failure; skipped pre-init. Regression tests: test_readiness_503_when_db_down + isolated test_readiness."
   },
   {
     "id": 76,
@@ -1191,7 +1193,9 @@
     "title": "claim_stale discards the XAUTOCLAIM cursor and always restarts at 0-0 with count=10",
     "root_cause": "The returned next-start cursor is ignored, so every recovery sweep rescans the PEL from the beginning. In Redis 7 COUNT bounds the number of PEL entries scanned, so if the first 10 PEL entries are fresh (actively processing deliveries), stale entries behind them are never reached.",
     "suggested_fix": "Persist and pass the returned cursor across sweeps (reset to 0-0 only when it returns 0-0), and/or raise count; alternatively iterate XPENDING to target known-stale ids.",
-    "failure_scenario": "12 messages pending: 10 recently delivered at the PEL head, 2 crashed-consumer messages behind them. Every _recover_pending scans only the first 10 (all fresh) and claims nothing; the orphaned messages wait until the head drains."
+    "failure_scenario": "12 messages pending: 10 recently delivered at the PEL head, 2 crashed-consumer messages behind them. Every _recover_pending scans only the first 10 (all fresh) and claims nothing; the orphaned messages wait until the head drains.",
+    "status": "fixed",
+    "verification_notes": "163 tests pass, ruff/mypy clean. claim_stale persists the XAUTOCLAIM cursor across sweeps (reset on 0-0 wrap). Regression test: test_claim_stale_persists_cursor."
   },
   {
     "id": 89,
@@ -1203,7 +1207,9 @@
     "title": "Comment claims stdlib logging is routed through structlog, but basicConfig leaves stdlib logs as plain text",
     "root_cause": "structlog.configure only affects structlog loggers; logging.basicConfig(format='%(message)s') does not attach a structlog ProcessorFormatter, so logging.getLogger(__name__) calls (worker dispatch, tasks, maintenance, bulk_jobs API) emit unstructured lines, contrary to the comment and the repo's structured-logging convention.",
     "suggested_fix": "Route stdlib records through structlog via logging.config.dictConfig with a ProcessorFormatter handler (foreign_pre_chain matching the configured processors), or convert stdlib loggers to structlog.",
-    "failure_scenario": "Log aggregation expecting JSON gets plain-text lines from pulse.worker.dispatch while pulse-worker emits JSON — parsing/alerting on those events silently fails."
+    "failure_scenario": "Log aggregation expecting JSON gets plain-text lines from pulse.worker.dispatch while pulse-worker emits JSON — parsing/alerting on those events silently fails.",
+    "status": "fixed",
+    "verification_notes": "163 tests pass. stdlib records routed through structlog ProcessorFormatter (JSON). Regression test: test_stdlib_logging_rendered_as_json."
   },
   {
     "id": 90,
@@ -1355,7 +1361,9 @@
     "title": "Middleware-order comment states the opposite of Starlette's actual behavior",
     "root_cause": "The comment claims 'first added = outermost', but Starlette's add_middleware inserts at position 0 so the LAST added middleware is outermost — here TenantMiddleware wraps CORSMiddleware. Harmless today only because TenantMiddleware is a no-op; any future enforcement in it would run before CORS and break preflight OPTIONS handling.",
     "suggested_fix": "Correct the comment and add TenantMiddleware before CORSMiddleware (so CORS is outermost), or drop the no-op middleware entirely.",
-    "failure_scenario": "A developer adds workspace enforcement to TenantMiddleware trusting the comment; browser preflight OPTIONS requests (no Authorization header) are rejected before CORSMiddleware can answer them, breaking all cross-origin UI calls."
+    "failure_scenario": "A developer adds workspace enforcement to TenantMiddleware trusting the comment; browser preflight OPTIONS requests (no Authorization header) are rejected before CORSMiddleware can answer them, breaking all cross-origin UI calls.",
+    "status": "fixed",
+    "verification_notes": "163 tests pass. TenantMiddleware added before CORS so CORS is outermost; comment corrected. Regression test: test_cors_middleware_is_outermost."
   },
   {
     "id": 101,
@@ -1367,7 +1375,9 @@
     "title": "Concurrent first requests create multiple Redis clients; losers leak unclosed",
     "root_cause": "_client() has no lock: N coroutines arriving while _redis is None each build a client and ping; the last assignment wins and the other N-1 clients (with open connection pools) are dropped without aclose().",
     "suggested_fix": "Guard creation with an asyncio.Lock, or close the previous client when replacing it.",
-    "failure_scenario": "API startup burst of 50 concurrent logins with Redis reachable -> up to 50 clients created, 49 abandoned with live connections -> connection leak against Redis maxclients until GC/finalizers run."
+    "failure_scenario": "API startup burst of 50 concurrent logins with Redis reachable -> up to 50 clients created, 49 abandoned with live connections -> connection leak against Redis maxclients until GC/finalizers run.",
+    "status": "fixed",
+    "verification_notes": "163 tests pass. RedisKV._client creation guarded by asyncio.Lock with double-check. Regression test: test_kv_client_creation_is_serialized (10 concurrent calls -> 1 client)."
   },
   {
     "id": 102,
