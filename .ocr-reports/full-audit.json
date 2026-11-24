@@ -849,7 +849,9 @@
     "title": "User model still declares uq_users_workspace_email after migration 002 replaced it with globally unique email",
     "root_cause": "002_user_auth drops uq_users_workspace_email and creates uq_users_email (email alone) because login looks users up without workspace context, but the ORM metadata was never updated. SQLite tests build tables from metadata (per-workspace uniqueness) while PostgreSQL enforces global uniqueness.",
     "suggested_fix": "Replace the model's UniqueConstraint with UniqueConstraint('email', name='uq_users_email') to match migration 002.",
-    "failure_scenario": "alembic autogenerate emits a spurious migration dropping uq_users_email and re-adding uq_users_workspace_email (which would break login lookups if applied); a test registering the same email in two workspaces passes on SQLite but violates uq_users_email in production."
+    "failure_scenario": "alembic autogenerate emits a spurious migration dropping uq_users_email and re-adding uq_users_workspace_email (which would break login lookups if applied); a test registering the same email in two workspaces passes on SQLite but violates uq_users_email in production.",
+    "status": "fixed",
+    "verification_notes": "149 tests pass, ruff/mypy clean. User model UniqueConstraint now uq_users_email(email) matching migration 002. Drift-guard test: test_user_and_workspace_constraints_match_migrations."
   },
   {
     "id": 62,
@@ -861,7 +863,9 @@
     "title": "Workspace.slug declares unique=True plus a named UniqueConstraint, creating a duplicate constraint absent from the migration",
     "root_cause": "mapped_column(unique=True) generates an unnamed unique constraint in Base.metadata in addition to the explicit uq_workspaces_slug in __table_args__. Migration 001 creates only uq_workspaces_slug, so metadata and database diverge.",
     "suggested_fix": "Drop unique=True from the slug column and keep only the named UniqueConstraint.",
-    "failure_scenario": "alembic check/autogenerate reports a phantom extra unique constraint on workspaces.slug; SQLite test schema carries a redundant second unique index."
+    "failure_scenario": "alembic check/autogenerate reports a phantom extra unique constraint on workspaces.slug; SQLite test schema carries a redundant second unique index.",
+    "status": "fixed",
+    "verification_notes": "149 tests pass. Removed unique=True from Workspace.slug; only named uq_workspaces_slug remains. Same drift-guard test."
   },
   {
     "id": 63,
@@ -873,7 +877,9 @@
     "title": "list_experiments issues one variant query per experiment (N+1)",
     "root_cause": "After the paginated experiment query, a separate select(ExperimentVariant) is executed for each item instead of a single selectinload/IN query. Same path exercised by GET /experiments (api/v1/experiments.py:88-105).",
     "suggested_fix": "Use selectinload(Experiment.variants) on the page query or one SELECT ... WHERE experiment_id IN (:ids) and group in Python.",
-    "failure_scenario": "GET /experiments?limit=100 executes 102 queries per request (count + page + 100 variant selects), multiplying DB round-trips and latency under load."
+    "failure_scenario": "GET /experiments?limit=100 executes 102 queries per request (count + page + 100 variant selects), multiplying DB round-trips and latency under load.",
+    "status": "fixed",
+    "verification_notes": "149 tests pass. list_experiments loads all page variants in one IN query. Regression test: test_list_experiments_single_variant_query (SQLAlchemy event listener counts exactly 1 variant SELECT for 3 experiments)."
   },
   {
     "id": 64,
@@ -885,7 +891,9 @@
     "title": "create_version computes max(version_number)+1 without locking; concurrent snapshots raise unhandled IntegrityError (500)",
     "root_cause": "Two concurrent POST /content/{id}/versions both read the same max version and insert the same next_version; uq_content_versions_piece_version rejects the second insert and nothing catches IntegrityError (same pattern as the slug pre-check in create()).",
     "suggested_fix": "Catch IntegrityError and retry/translate to 409, or lock the parent row (SELECT ... FOR UPDATE) before computing the next version number.",
-    "failure_scenario": "Two editors (or a double-clicked UI) snapshot the same content simultaneously: one gets 201, the other a 500 instead of a clean conflict/retry; the same race on create() turns a duplicate slug into a 500 instead of the intended 409."
+    "failure_scenario": "Two editors (or a double-clicked UI) snapshot the same content simultaneously: one gets 201, the other a 500 instead of a clean conflict/retry; the same race on create() turns a duplicate slug into a 500 instead of the intended 409.",
+    "status": "fixed",
+    "verification_notes": "149 tests pass. create() and create_version() catch IntegrityError -> rollback -> 409. Regression test: test_create_version_conflict_returns_409."
   },
   {
     "id": 65,
@@ -897,7 +905,9 @@
     "title": "Raw database URL passed to ConfigParser interpolation breaks alembic when the URL contains '%'",
     "root_cause": "config.set_main_option stores the URL in a ConfigParser section; percent signs (common in percent-encoded passwords, e.g. p%40ss) are interpreted as interpolation syntax when alembic later reads sqlalchemy.url, raising InterpolationSyntaxError. Alembic requires escaping '%' as '%%'.",
     "suggested_fix": "config.set_main_option(\"sqlalchemy.url\", get_settings().database_url.replace(\"%\", \"%%\")) — or pass the URL via custom engine attributes instead of the ini section.",
-    "failure_scenario": "DATABASE_URL=postgresql+asyncpg://pulse:p%40ss@host/pulse -> every alembic command crashes with configparser.InterpolationSyntaxError before touching the database."
+    "failure_scenario": "DATABASE_URL=postgresql+asyncpg://pulse:p%40ss@host/pulse -> every alembic command crashes with configparser.InterpolationSyntaxError before touching the database.",
+    "status": "fixed",
+    "verification_notes": "149 tests pass. env.py escapes % as %% for ConfigParser. Drift-guard test: test_alembic_env_escapes_percent_in_url."
   },
   {
     "id": 66,

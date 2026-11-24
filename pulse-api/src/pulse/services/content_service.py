@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -67,7 +68,16 @@ class ContentService:
             updated_at=datetime.now(UTC),
         )
         db.add(content)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            # Concurrent create with the same slug lost the pre-check race
+            # (audit finding #64) — translate to a clean 409, not a 500.
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Content with slug '{data.slug}' already exists in this workspace",
+            ) from err
         await db.refresh(content)
         return content
 
@@ -237,7 +247,16 @@ class ContentService:
             created_at=datetime.now(UTC),
         )
         db.add(version)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            # Concurrent snapshots computed the same max+1 version number
+            # (audit finding #64) — clean 409 instead of an unhandled 500.
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Concurrent version creation conflict; retry the request",
+            ) from err
         await db.refresh(version)
         return version
 

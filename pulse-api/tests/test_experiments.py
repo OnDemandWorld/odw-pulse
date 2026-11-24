@@ -966,3 +966,47 @@ def test_tracking_url_preserves_repeated_and_blank_params() -> None:
     assert params["tag"] == ["a", "b"]
     assert params["ref"] == [""]
     assert params["experiment_id"] == ["exp1"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #63 — list_experiments loads variants in one query
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_experiments_single_variant_query(
+    async_session: AsyncSession,
+    async_engine: Any,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    from sqlalchemy import event
+
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+
+    svc = ExperimentService()
+    for i in range(3):
+        await svc.create_experiment(
+            db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
+            data=ExperimentCreate(
+                name=f"N+1 probe {i}",
+                variants=[ExperimentVariantCreate(name="c", weight=1.0)],
+            ),
+        )
+
+    variant_queries = 0
+
+    def _count(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        nonlocal variant_queries
+        if "experiment_variants" in statement and statement.strip().upper().startswith("SELECT"):
+            variant_queries += 1
+
+    event.listen(async_engine.sync_engine, "before_cursor_execute", _count)
+    try:
+        items, total = await svc.list_experiments(async_session, TEST_WORKSPACE_ID)
+    finally:
+        event.remove(async_engine.sync_engine, "before_cursor_execute", _count)
+
+    assert total >= 3
+    assert len(items) >= 3
+    assert variant_queries == 1

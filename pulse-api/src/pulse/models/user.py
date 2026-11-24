@@ -58,7 +58,9 @@ class User(Base):
     workspace: Mapped[object] = relationship("Workspace", back_populates="users", lazy="noload")
 
     __table_args__ = (
-        UniqueConstraint("workspace_id", "email", name="uq_users_workspace_email"),
+        # Matches migration 002 (audit finding #61): login looks users up by
+        # email alone, so uniqueness is global, not per-workspace.
+        UniqueConstraint("email", name="uq_users_email"),
         {"comment": "Workspace-scoped user identity."},
     )
 

@@ -8,6 +8,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.conftest import TEST_WORKSPACE_ID
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/content — authentication
 # ---------------------------------------------------------------------------
@@ -448,3 +450,39 @@ async def test_versions_endpoint_cannot_edit_approved_content(
     # Snapshot-only version creation (no body) is still allowed.
     response = await authorized_client.post(f"/api/v1/content/{content_id}/versions")
     assert response.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #64 — IntegrityError translates to 409, not 500
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_create_version_conflict_returns_409(
+    async_session: AsyncSession,
+    test_workspace_and_user: tuple[Any, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
+    from pulse.api.schemas.content import ContentCreate
+    from pulse.services.content_service import ContentService
+
+    svc = ContentService()
+    content = await svc.create(
+        async_session,
+        TEST_WORKSPACE_ID,
+        ContentCreate(slug="conflict-probe", title="Conflict"),
+    )
+
+    original_commit = async_session.commit
+
+    async def _conflicting_commit() -> None:
+        raise IntegrityError("INSERT ...", None, Exception("duplicate key"))
+
+    monkeypatch.setattr(async_session, "commit", _conflicting_commit)
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.create_version(async_session, content.id, TEST_WORKSPACE_ID)
+    assert exc_info.value.status_code == 409
+    monkeypatch.setattr(async_session, "commit", original_commit)

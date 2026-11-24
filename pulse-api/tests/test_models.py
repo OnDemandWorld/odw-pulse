@@ -392,3 +392,34 @@ def test_migration_rls_and_default_partitions_cover_telemetry() -> None:
     assert "_default PARTITION OF" in text001
     text002 = (versions / "002_user_auth.py").read_text()
     assert '"performance_events"' in text002
+
+
+def test_user_and_workspace_constraints_match_migrations() -> None:
+    """Drift guard (audit #61/#62)."""
+    from pulse.models.user import User
+    from pulse.models.workspace import Workspace
+
+    user_uniques = {
+        c.name: [col.name for col in c.columns]
+        for c in User.__table__.constraints
+        if isinstance(c, sa.UniqueConstraint)
+    }
+    assert user_uniques.get("uq_users_email") == ["email"]
+    assert "uq_users_workspace_email" not in user_uniques
+
+    slug_col = Workspace.__table__.c.slug
+    assert slug_col.unique is not True
+    slug_uniques = [
+        c for c in Workspace.__table__.constraints
+        if isinstance(c, sa.UniqueConstraint) and "slug" in [col.name for col in c.columns]
+    ]
+    assert len(slug_uniques) == 1
+    assert slug_uniques[0].name == "uq_workspaces_slug"
+
+
+def test_alembic_env_escapes_percent_in_url() -> None:
+    """Drift guard (audit #65): ConfigParser interpolation requires %%."""
+    from pathlib import Path
+
+    env_py = Path(__file__).resolve().parents[1] / "src/pulse/db/migrations/env.py"
+    assert '.replace("%", "%%")' in env_py.read_text()

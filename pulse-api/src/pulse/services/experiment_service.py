@@ -148,14 +148,19 @@ class ExperimentService:
         result = await db.execute(query)
         items = list(result.scalars().all())
 
-        # Load variants for each experiment
-        for item in items:
+        # Load variants for the whole page in ONE query (audit finding #63
+        # — previously one SELECT per experiment, 102 queries at limit=100).
+        if items:
             variants_result = await db.execute(
                 select(ExperimentVariant)
-                .where(ExperimentVariant.experiment_id == item.id)
+                .where(ExperimentVariant.experiment_id.in_([i.id for i in items]))
                 .order_by(ExperimentVariant.position)
             )
-            item.variants = list(variants_result.scalars().all())
+            by_experiment: dict[uuid.UUID, list[ExperimentVariant]] = {}
+            for variant in variants_result.scalars():
+                by_experiment.setdefault(variant.experiment_id, []).append(variant)
+            for item in items:
+                item.variants = by_experiment.get(item.id, [])
 
         return items, total
 
