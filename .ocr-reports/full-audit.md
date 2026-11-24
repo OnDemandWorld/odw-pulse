@@ -23,29 +23,31 @@ Run before any edits; **no pre-existing failures**:
 
 Fix progress is tracked per finding via `status` / `verification_notes` in `full-audit.json` and the checkboxes below.
 
-## Fix-round progress (2026-11-24, branch `dev`)
+## Fix-round progress (2026-11-24 → 2026-11-25, branch `dev`)
 
 | Band | Fixed | Skipped | Open |
 |---|---|---|---|
 | High (#1–#12) | **12** | 0 | 0 |
 | Medium (#13–#58) | **44** | 2 (#31, #39) | 0 |
-| Low (#59–#102) | 2 (#68, #102) | 0 | 42 |
+| Low (#59–#102) | **44** | 0 | 0 |
+| **Total** | **100** | **2** | **0** |
 
-Executed in 9 batches (≤5 findings each), each followed by the full check suite. Final verification (all exit 0):
+Executed in 19 batches (≤5 findings each), each followed by the full check suite. Final verification (all exit 0):
 
-- `cd pulse-api && .venv/bin/pytest tests -q` → **140 passed** (98 baseline + 42 new regression tests)
+- `cd pulse-api && .venv/bin/pytest tests -q` → **168 passed** (98 baseline + 70 new regression tests; several baseline tests strengthened in place)
 - `cd pulse-api && .venv/bin/ruff check src tests` → clean
 - `cd pulse-api && .venv/bin/mypy src` → clean (97 files)
 - `cd pulse-ui && npm run typecheck && npm run lint && npm run build` → all exit 0
-- `yaml.safe_load_all` over all `k8s/*.yaml` + `docker-compose.yml` → all parse
+- `yaml.safe_load_all` over all `k8s/*.yaml` + `docker-compose.yml` + `ci.yml` → all parse
+- Test suite now runs against the **real `create_app()`** wiring (#81), so production middleware/router/guard regressions can no longer hide behind a hand-built fixture.
 
 **Skipped (documented in JSON `verification_notes`):**
 - **#31** — httpOnly-cookie session migration is an architectural change (backend cookie auth + CSRF + refresh flow); mitigations landed instead (#53 ephemeral dev keys, #68 security headers, existing 30-min TTL + revocation). Plan as a dedicated task.
 - **#39** — TLS requires an operator certificate-provisioning decision; a ready-to-enable `tls` block + cert-manager/ssl-redirect annotation template was added to `k8s/ingress.yaml`.
 
-**Pending live-environment verification (no Docker host/cluster in this environment):** real-PostgreSQL `alembic upgrade head` (#3/#6), compose/k8s end-to-end smoke test (#5/#6/#7/#40), Redis Lua script against a real server (#47). Recommended next step: add a real-PostgreSQL migration job + semantic manifest validation to CI (#72) and run the compose smoke test on a Docker host.
+**Pending live-environment verification (no Docker host/cluster in this environment):** compose/k8s end-to-end smoke test (#5/#6/#7/#40), Redis Lua script against a real server (#47), SigV4 against real MinIO (#85). The real-PostgreSQL migration check and semantic manifest validation are now **in CI** (#72: `migrations-postgres` job runs `alembic upgrade head / downgrade base / upgrade head` on PostgreSQL 16; the manifest step rejects `$(VAR)` refs not defined earlier in the same env list) — they execute on the next CI run for this branch/PR.
 
-**Remaining open items:** the 42 Low findings (#59–#101 minus #68). Notable candidates for a follow-up round: #81 (conftest should build `create_app()`), #72 (CI semantic validation), #95 (fail-open substring match), #85 (S3 signing — prerequisite if bulk storage moves from shared volumes to object storage).
+**Remaining open items:** none in the audit. The two skips (#31, #39) are decision/architecture tasks documented above, not unreviewed code.
 
 ## Coverage
 
