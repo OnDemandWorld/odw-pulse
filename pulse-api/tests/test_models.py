@@ -235,6 +235,7 @@ async def test_content_version_relationship(session: AsyncSession) -> None:
     v1 = ContentVersion(
         id=uuid.uuid4(),
         content_piece_id=piece_id,
+        workspace_id=ws_id,
         version_number=1,
         body="Draft body",
         status=ContentStatus.DRAFT,
@@ -304,3 +305,48 @@ async def test_experiment_and_variant(session: AsyncSession) -> None:
     assert len(variants) == 2
     assert variants[0].name == "control"
     assert variants[1].name == "treatment"
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #3 — partition keys must be part of PKs / child FKs
+# ---------------------------------------------------------------------------
+
+
+def test_partitioned_tables_include_partition_key_in_pk() -> None:
+    """PostgreSQL requires the partition key in every PK on partitioned tables."""
+    from pulse.models.audit_log import AuditLog
+    from pulse.models.content import ContentPiece, ContentVersion, ReviewAnnotation
+    from pulse.models.performance_event import (
+        ExperimentAssignment,
+        ExperimentExposure,
+        PerformanceEvent,
+    )
+
+    expectations = [
+        (ContentPiece, "workspace_id"),
+        (AuditLog, "created_at"),
+        (ExperimentAssignment, "assigned_at"),
+        (ExperimentExposure, "exposed_at"),
+        (PerformanceEvent, "received_at"),
+    ]
+    for model, partition_col in expectations:
+        pk_cols = {c.name for c in model.__table__.primary_key.columns}
+        assert partition_col in pk_cols, (
+            f"{model.__tablename__} PK {pk_cols} missing partition key {partition_col}"
+        )
+
+    # Children referencing the HASH-partitioned content_pieces must use
+    # composite FKs (id, workspace_id).
+    for child in (ContentVersion, ReviewAnnotation, PerformanceEvent):
+        fks = [
+            fk
+            for fk in child.__table__.foreign_keys
+            if fk.column.table.name == "content_pieces"
+        ]
+        assert fks, f"{child.__tablename__} has no FK to content_pieces"
+        for fk in fks:
+            assert fk.parent.name in ("content_piece_id", "workspace_id")
+            constrained = {c.name for c in fk.constraint.columns}
+            assert constrained == {"content_piece_id", "workspace_id"}, (
+                f"{child.__tablename__} FK must be composite, got {constrained}"
+            )

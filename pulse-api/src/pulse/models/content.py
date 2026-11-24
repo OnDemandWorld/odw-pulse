@@ -21,6 +21,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Text,
@@ -71,9 +72,12 @@ class ContentPiece(Base):
         primary_key=True,
         server_default=func.gen_random_uuid(),
     )
+    # Part of the composite PK: PostgreSQL requires the partition key in
+    # every PK on a partitioned table (audit finding #3).
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="CASCADE"),
+        primary_key=True,
         nullable=False,
     )
     slug: Mapped[str] = mapped_column(Text, nullable=False)
@@ -130,10 +134,10 @@ class ContentVersion(Base):
     )
     content_piece_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("content_pieces.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column(
@@ -160,6 +164,12 @@ class ContentVersion(Base):
     )
 
     __table_args__ = (
+        # Composite FK: the partitioned parent's PK is (id, workspace_id).
+        ForeignKeyConstraint(
+            ["content_piece_id", "workspace_id"],
+            ["content_pieces.id", "content_pieces.workspace_id"],
+            ondelete="CASCADE",
+        ),
         UniqueConstraint(
             "content_piece_id", "version_number", name="uq_content_versions_piece_version"
         ),
@@ -184,10 +194,10 @@ class ReviewAnnotation(Base):
     )
     content_piece_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("content_pieces.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -209,6 +219,11 @@ class ReviewAnnotation(Base):
     )
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["content_piece_id", "workspace_id"],
+            ["content_pieces.id", "content_pieces.workspace_id"],
+            ondelete="CASCADE",
+        ),
         {"comment": "Review annotations and actions on content pieces."},
     )
 

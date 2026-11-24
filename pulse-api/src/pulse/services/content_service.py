@@ -215,6 +215,7 @@ class ContentService:
         version = ContentVersion(
             id=uuid.uuid4(),
             content_piece_id=content_id,
+            workspace_id=workspace_id,
             version_number=next_version,
             body=content.body,
             metadata_=content.metadata_,

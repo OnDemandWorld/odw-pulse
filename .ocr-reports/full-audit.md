@@ -8,6 +8,21 @@
 - **Companion data:** [`full-audit.json`](./full-audit.json) — finding IDs below match the `id` field there
 - **Guardrails honored:** no source files were modified during this pass; outputs are confined to `./.ocr-reports/`
 
+## Fix-round baseline (2026-11-24, branch `dev` off `master@7d4ae71`)
+
+Run before any edits; **no pre-existing failures**:
+
+| Check | Command (from repo root) | Result |
+|---|---|---|
+| Backend tests | `cd pulse-api && .venv/bin/pytest tests -q` | ✅ 98 passed in 22.17s (exit 0) |
+| Backend lint | `cd pulse-api && .venv/bin/ruff check src tests` | ✅ All checks passed (exit 0) |
+| Backend types | `cd pulse-api && .venv/bin/mypy src` | ✅ Success: no issues in 97 source files (exit 0) |
+| Frontend types | `cd pulse-ui && npm run typecheck` | ✅ exit 0 |
+| Frontend lint | `cd pulse-ui && npm run lint` | ✅ exit 0 |
+| Frontend build | `cd pulse-ui && npm run build` | ✅ built in 944ms (exit 0) |
+
+Fix progress is tracked per finding via `status` / `verification_notes` in `full-audit.json` and the checkboxes below.
+
 ## Coverage
 
 | Metric | Value |
@@ -49,17 +64,17 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 
 ## HIGH severity (12) — fix first
 
-- [ ] **#1 — LLM provider registry never populated; every /generate and bulk row fails** (`pulse-api/src/pulse/api/v1/generate.py:38-51`)
+- [x] **#1 — LLM provider registry never populated; every /generate and bulk row fails** ✅ fixed 2026-11-24 (102 tests pass; bootstrap + 2 regression tests) (`pulse-api/src/pulse/api/v1/generate.py:38-51`)
   No production code calls `registry.register()`; `get_orchestrator()` raises `RuntimeError`. Bootstrap providers from settings at API/worker startup with explicit preference order; add an end-to-end registry test.
-- [ ] **#2 — LLM failures returned as successful results; bulk jobs mark SUCCEEDED with empty content** (`pulse-api/src/pulse/generation/orchestrator.py:146-170`)
+- [x] **#2 — LLM failures returned as successful results; bulk jobs mark SUCCEEDED with empty content** ✅ fixed 2026-11-24 (GenerationError → 502 / per-row bulk errors; regression test) (`pulse-api/src/pulse/generation/orchestrator.py:146-170`)
   `finish_reason='error'` only feeds the circuit breaker; empty text is scored and returned. Raise a GenerationError on error responses; map to 502/503 and per-row bulk failures.
-- [ ] **#3 — Migration 001 invalid on PostgreSQL: partitioned PKs omit partition key; child FKs illegal** (`pulse-api/src/pulse/db/migrations/versions/001_initial_schema.py:258-263`)
+- [x] **#3 — Migration 001 invalid on PostgreSQL: partitioned PKs omit partition key; child FKs illegal** ✅ fixed 2026-11-24 (composite PKs/FKs in DDL+ORM; regression test; real-PG alembic run pending Docker host) (`pulse-api/src/pulse/db/migrations/versions/001_initial_schema.py:258-263`)
   `content_pieces`/`audit_logs`/`experiment_assignments`/`experiment_exposures`/`performance_events` all affected. Composite PKs + composite FKs (or drop partitioning); add a real-PostgreSQL migration CI job.
 - [ ] **#4 — Pause/resume deadlock: worker polls a stale identity-map instance forever** (`pulse-api/src/pulse/worker/tasks.py:181-197`)
   `expire_on_commit=False` + plain re-SELECT in `get_job` → `_wait_for_resume` never sees RUNNING/CANCELLED; wedges the sequential worker. Use `populate_existing=True` or `db.refresh()` per poll; cap pause duration.
-- [ ] **#5 — k8s `$(POSTGRES_PASSWORD)` never expands (envFrom vars aren't in the expansion map)** (`k8s/pulse-api.yaml:26-29`, also `pulse-worker.yaml:24-26`, `pulse-scheduler.yaml:26-28`)
+- [x] **#5 — k8s `$(POSTGRES_PASSWORD)` never expands (envFrom vars aren't in the expansion map)** ✅ fixed 2026-11-24 (explicit secretKeyRef env in all 3 manifests; YAML validated) (`k8s/pulse-api.yaml:26-29`, also `pulse-worker.yaml:24-26`, `pulse-scheduler.yaml:26-28`)
   All three Python services crash-loop with a literal password. Define POSTGRES_PASSWORD via `valueFrom.secretKeyRef` in `env` before DATABASE_URL, or secret the whole URL.
-- [ ] **#6 — No deployment path runs Alembic migrations; fresh deployments have an empty schema** (`pulse-api/Dockerfile:16`)
+- [x] **#6 — No deployment path runs Alembic migrations; fresh deployments have an empty schema** ✅ fixed 2026-11-24 (compose migrate service + k8s initContainers + alembic.ini in images; live run pending Docker host) (`pulse-api/Dockerfile:16`)
   No compose migrate service, no k8s Job/initContainer, `alembic.ini` not in the image. Add a migration step (fix #3 first).
 - [ ] **#7 — Bulk input/output files are container-local /tmp; no shared volume between API and worker** (`pulse-api/src/pulse/api/v1/bulk_jobs.py:39-41`)
   Every job fails "Input file missing" in compose/k8s; downloads 404 permanently. Move payloads to S3/MinIO (fix #85 signing first) or a shared RWX volume.

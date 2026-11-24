@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install dependencies first (without src/) to leverage layer caching.
 # Only the build-system backend is needed to resolve the hatchling build.
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md alembic.ini ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 

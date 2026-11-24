@@ -13,10 +13,11 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from pulse.api.deps import CurrentUser
-from pulse.generation.models import GenerationRequest, GenerationResult
+from pulse.generation.models import GenerationError, GenerationRequest, GenerationResult
 from pulse.generation.orchestrator import GenerationOrchestrator
 from pulse.llm import FallbackRouter, get_registry
 from pulse.llm.fallback_router import CircuitBreakerConfig
+from pulse.llm.registry import bootstrap_providers_from_settings
 
 router = APIRouter(tags=["generation"])
 
@@ -31,7 +32,12 @@ def get_orchestrator() -> GenerationOrchestrator:
         # Set up fallback router with default providers
         registry = get_registry()
 
-        # Try to get providers from registry, or create mock ones for now
+        # Populate the registry from configuration (OPENAI_API_KEY,
+        # ANTHROPIC_API_KEY, OLLAMA_BASE_URL) on first use. Covers both the
+        # API and the worker, which imports this factory.
+        if not registry.list_providers():
+            bootstrap_providers_from_settings()
+
         primary = None
         secondary = None
 
@@ -80,6 +86,11 @@ async def generate(request: GenerationRequest, current_user: CurrentUser) -> Gen
         orchestrator = get_orchestrator()
         result = await orchestrator.generate(request)
         return result
+    except GenerationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Generation failed: upstream LLM provider error",
+        ) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -128,6 +139,11 @@ async def generate_stream(
                 "X-Accel-Buffering": "no",
             },
         )
+    except GenerationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Streaming generation failed: upstream LLM provider error",
+        ) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

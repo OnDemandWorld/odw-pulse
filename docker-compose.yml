@@ -42,6 +42,23 @@ services:
       timeout: 3s
       retries: 5
 
+  # One-shot schema migration (audit finding #6): runs alembic before any
+  # app service starts. App services gate on its successful completion.
+  migrate:
+    build:
+      context: ./pulse-api
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   pulse-api:
     build:
       context: ./pulse-api
@@ -75,6 +92,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   pulse-worker:
     build:
@@ -91,6 +110,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   pulse-scheduler:
     build:
@@ -107,6 +128,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   pulse-ui:
     build:

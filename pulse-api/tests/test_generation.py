@@ -232,3 +232,79 @@ async def test_fallback_router_recovers_after_timeout(monkeypatch: pytest.Monkey
     await router.record_success()
     provider = await router.route_request()
     assert provider.provider_name == "primary"
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #2 — provider failure must not be returned as success
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_orchestrator_raises_on_provider_error() -> None:
+    """A failing LLM provider raises GenerationError instead of returning empty content."""
+    from pulse.generation.models import GenerationError
+
+    failing = MockLLMProvider(name="failing", should_fail=True)
+    router = FallbackRouter(primary=failing, secondary=failing)
+    orchestrator = GenerationOrchestrator(fallback_router=router)
+
+    request = GenerationRequest(
+        content_type="blog_post",
+        target_market="en-US",
+        prompt="Write about artificial intelligence",
+    )
+
+    with pytest.raises(GenerationError):
+        await orchestrator.generate(request)
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #1 — registry bootstrap from settings
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_registers_configured_providers() -> None:
+    """bootstrap_providers_from_settings registers configured providers deterministically."""
+    from pulse.config import Settings
+    from pulse.llm.registry import (
+        bootstrap_providers_from_settings,
+        get_registry,
+        reset_registry,
+    )
+
+    reset_registry()
+    try:
+        settings = Settings(
+            openai_api_key="sk-test",
+            anthropic_api_key="sk-ant-test",
+            ollama_base_url=None,
+        )
+        registry = bootstrap_providers_from_settings(settings)
+        assert registry.list_providers() == ["openai", "anthropic"]
+
+        # Idempotent: a second call must not raise or duplicate.
+        bootstrap_providers_from_settings(settings)
+        assert registry.list_providers() == ["openai", "anthropic"]
+        assert get_registry() is registry
+    finally:
+        reset_registry()
+
+
+def test_get_orchestrator_bootstraps_empty_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_orchestrator populates an empty registry from settings instead of raising."""
+    from pulse.api.v1.generate import get_orchestrator, reset_orchestrator
+    from pulse.config import Settings
+    from pulse.llm.registry import reset_registry
+
+    reset_registry()
+    reset_orchestrator()
+    try:
+        settings = Settings(
+            openai_api_key="sk-test", anthropic_api_key=None, ollama_base_url=None
+        )
+        monkeypatch.setattr("pulse.config.get_settings", lambda: settings)
+        orchestrator = get_orchestrator()
+        assert orchestrator is not None
+    finally:
+        reset_orchestrator()
+        reset_registry()

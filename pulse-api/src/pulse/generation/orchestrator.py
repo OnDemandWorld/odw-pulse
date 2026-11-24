@@ -12,7 +12,7 @@ from typing import Any
 
 from pulse.cultural.engine import CulturalAdaptationEngine
 from pulse.cultural.market_profile import load_market_profile
-from pulse.generation.models import GenerationRequest, GenerationResult
+from pulse.generation.models import GenerationError, GenerationRequest, GenerationResult
 from pulse.llm.fallback_router import FallbackRouter
 from pulse.prompts.composer import PromptComposer
 from pulse.quality.engine import QualityScoringEngine
@@ -146,8 +146,15 @@ class GenerationOrchestrator:
         # Record success/failure for circuit breaker
         if llm_response.finish_reason == "error":
             await self._router.record_failure()
-        else:
-            await self._router.record_success()
+            # Never return a provider failure as a successful result: an
+            # empty-text "success" would mark bulk jobs SUCCEEDED with no
+            # content. Propagate so callers record a real failure.
+            status_code = llm_response.metadata.get("status_code")
+            raise GenerationError(
+                "LLM provider failed to generate content",
+                status_code=int(status_code) if isinstance(status_code, int) else None,
+            )
+        await self._router.record_success()
 
         # Step 7: Run quality scoring
         quality_result = self._quality_engine.score(

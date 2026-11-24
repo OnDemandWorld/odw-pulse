@@ -44,6 +44,7 @@ class ReviewService:
         annotation = ReviewAnnotation(
             id=uuid.uuid4(),
             content_piece_id=content_id,
+            workspace_id=workspace_id,
             action=ReviewAction.SUBMITTED,
             comment="Content submitted for review",
             created_at=datetime.now(UTC),
@@ -77,6 +78,7 @@ class ReviewService:
         annotation = ReviewAnnotation(
             id=uuid.uuid4(),
             content_piece_id=content_id,
+            workspace_id=workspace_id,
             user_id=user_id,
             action=ReviewAction.APPROVED,
             comment="Content approved",
@@ -112,6 +114,7 @@ class ReviewService:
         annotation = ReviewAnnotation(
             id=uuid.uuid4(),
             content_piece_id=content_id,
+            workspace_id=workspace_id,
             user_id=user_id,
             action=ReviewAction.REJECTED,
             comment=reason or "Content rejected",
@@ -148,6 +151,7 @@ class ReviewService:
         annotation = ReviewAnnotation(
             id=uuid.uuid4(),
             content_piece_id=content_id,
+            workspace_id=workspace_id,
             user_id=user_id,
             action=ReviewAction.CHANGES_REQUESTED,
             comment=feedback or "Changes requested",
@@ -173,6 +177,7 @@ class ReviewService:
         annotation = ReviewAnnotation(
             id=uuid.uuid4(),
             content_piece_id=content_id,
+            workspace_id=workspace_id,
             user_id=user_id,
             action=annotation_data.action,
             comment=annotation_data.comment,

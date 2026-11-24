@@ -6,7 +6,12 @@ to register, retrieve, and list available providers.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pulse.llm.base import LLMProvider
+
+if TYPE_CHECKING:
+    from pulse.config import Settings
 
 
 class ProviderRegistry:
@@ -98,3 +103,34 @@ def reset_registry() -> None:
     if _global_registry is not None:
         _global_registry.clear()
     _global_registry = None
+
+
+def bootstrap_providers_from_settings(settings: Settings | None = None) -> ProviderRegistry:
+    """Register providers configured via settings into the global registry.
+
+    Idempotent: already-registered providers are left untouched. Registration
+    order is deterministic (openai, anthropic, ollama) so primary/secondary
+    selection never depends on accidental dict ordering. Called lazily by the
+    generation orchestrator factory, covering both the API and worker paths.
+
+    Args:
+        settings: Optional settings override (defaults to get_settings()).
+
+    Returns:
+        The global registry, populated with every configured provider.
+    """
+    from pulse.config import get_settings
+    from pulse.llm.providers.anthropic import AnthropicProvider
+    from pulse.llm.providers.ollama import OllamaProvider
+    from pulse.llm.providers.openai import OpenAIProvider
+
+    s = settings or get_settings()
+    registry = get_registry()
+    registered = registry.list_providers()
+    if s.openai_api_key and "openai" not in registered:
+        registry.register("openai", OpenAIProvider(api_key=s.openai_api_key))
+    if s.anthropic_api_key and "anthropic" not in registered:
+        registry.register("anthropic", AnthropicProvider(api_key=s.anthropic_api_key))
+    if s.ollama_base_url and "ollama" not in registered:
+        registry.register("ollama", OllamaProvider(base_url=s.ollama_base_url))
+    return registry
