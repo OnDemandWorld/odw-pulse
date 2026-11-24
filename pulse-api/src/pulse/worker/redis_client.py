@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from pulse.config import get_settings
+from pulse.core.redis_kv import redact_url
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class RedisClient:
             self._redis_url,
             decode_responses=True,
         )
-        logger.info("Connected to Redis at %s", self._redis_url)
+        logger.info("Connected to Redis at %s", redact_url(self._redis_url))
 
     async def disconnect(self) -> None:
         """Close the async Redis connection (safe to call when broken)."""
@@ -50,7 +51,10 @@ class RedisClient:
         """Append a job ID to a Redis Stream for worker consumption."""
         if self._redis is None:
             raise RuntimeError("Redis client not connected; call connect() first")
-        await self._redis.xadd(stream, {"job_id": job_id})
+        # Bounded stream (audit finding #49): acked entries are never removed
+        # by XACK, so without MAXLEN the stream grows forever and eventually
+        # OOMs the Redis instance that also holds rate-limit/revocation state.
+        await self._redis.xadd(stream, {"job_id": job_id}, maxlen=10_000, approximate=True)
         logger.info("Pushed job %s to stream %s", job_id, stream)
 
     async def ensure_group(

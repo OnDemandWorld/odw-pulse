@@ -129,15 +129,15 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [ ] **#41 — Tenant-isolation test never attempts cross-workspace access (vacuous)** (`tests/test_auth.py:86-133`) — request A's resources with B's token; assert 404/empty.
 
 ### Worker / integrations / experiments core
-- [ ] **#42 — Reaper fails live RUNNING jobs (progress written only every 10 rows > 10-min window)** (`worker/maintenance.py:56-69`) — time-based heartbeat; conditional final write.
+- [x] **#42 — Reaper fails live RUNNING jobs (progress written only every 10 rows > 10-min window)** (`worker/maintenance.py:56-69`) — time-based heartbeat; conditional final write.
 - [x] **#43 — Conversions counted per event vs unique visitors: rates >1, inflated significance** (`core/experiment/results.py:49-57`) — dedupe converting visitors; feeds #10.
 - [x] **#44 — Winner recommendation inverted with 3+ arms ("control significantly better" when treatment won)** (`core/experiment/results.py:140-160`) — evaluate the significant pair's own direction; multiple-comparison correction.
 - [ ] **#45 — SSRF guard validate-then-fetch: DNS rebinding bypass** (`integrations/webhooks/url_guard.py:72-82`) — pin the validated IP for the connection.
 - [ ] **#46 — Blocking socket.getaddrinfo on the event loop; attacker DNS stalls all requests** (`integrations/webhooks/url_guard.py:73`) — async/threaded resolution with timeout.
-- [ ] **#47 — Non-atomic INCR+EXPIRE: rate-limit key can lose TTL → permanent 429 lockout of an IP** (`core/redis_kv.py:104-111`) — Lua/pipeline; defensively re-expire TTL=-1 keys.
-- [ ] **#48 — Full Redis URL (with password) logged at INFO** (`worker/redis_client.py:39`, also `core/redis_kv.py:67`) — strip userinfo.
-- [ ] **#49 — Bulk-job stream never trimmed (no MAXLEN/XTRIM/XDEL); unbounded Redis memory** (`worker/redis_client.py:49-54`) — approximate MAXLEN or periodic XTRIM.
-- [ ] **#50 — PAUSED jobs orphaned by worker crash are never recovered** (`worker/maintenance.py:56-83`) — include PAUSED in reaper recovery; ownership-aware acks.
+- [x] **#47 — Non-atomic INCR+EXPIRE: rate-limit key can lose TTL → permanent 429 lockout of an IP** (`core/redis_kv.py:104-111`) — Lua/pipeline; defensively re-expire TTL=-1 keys.
+- [x] **#48 — Full Redis URL (with password) logged at INFO** (`worker/redis_client.py:39`, also `core/redis_kv.py:67`) — strip userinfo.
+- [x] **#49 — Bulk-job stream never trimmed (no MAXLEN/XTRIM/XDEL); unbounded Redis memory** (`worker/redis_client.py:49-54`) — approximate MAXLEN or periodic XTRIM.
+- [x] **#50 — PAUSED jobs orphaned by worker crash are never recovered** (`worker/maintenance.py:56-83`) — include PAUSED in reaper recovery; ownership-aware acks.
 
 ### Auth / API
 - [ ] **#51 — Passwords >72 bytes → unhandled 500 (bcrypt 5.0 raises, no length cap)** (`auth/models.py:65-74`) — schema max-length or pre-hash; catch ValueError.

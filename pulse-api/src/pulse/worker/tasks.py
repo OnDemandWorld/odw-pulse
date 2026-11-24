@@ -12,6 +12,7 @@ import asyncio
 import csv
 import logging
 import tempfile
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,11 @@ PROGRESS_BATCH = 10
 
 # How often (seconds) to poll for pause/cancel while waiting.
 _PAUSE_POLL_INTERVAL = 2.0
+
+# Max seconds between updated_at heartbeats (audit finding #42). Must stay
+# well below maintenance.STALE_AFTER (10 min) even when individual LLM rows
+# are slow, so the reaper never fails a live job.
+_HEARTBEAT_INTERVAL = 30.0
 
 # Shared storage directories.
 _UPLOAD_DIR = Path(tempfile.gettempdir()) / "pulse_bulk_uploads"
@@ -128,6 +134,7 @@ async def process_bulk_job(
         results: list[dict[str, Any]] = []
         errors: dict[str, Any] = {}
         unreported = 0  # Rows processed since the last progress DB write.
+        last_heartbeat = time.monotonic()
 
         for idx, row in enumerate(rows):
             # ---- pause / cancel gate ----
@@ -161,9 +168,14 @@ async def process_bulk_job(
 
             # ---- progress ----
             unreported += 1
-            if unreported >= PROGRESS_BATCH or idx == len(rows) - 1:
+            if (
+                unreported >= PROGRESS_BATCH
+                or idx == len(rows) - 1
+                or time.monotonic() - last_heartbeat >= _HEARTBEAT_INTERVAL
+            ):
                 await svc.increment_progress(db, jid, job.workspace_id, count=unreported)
                 unreported = 0
+                last_heartbeat = time.monotonic()
 
         # ---- write output ----
         output_path = _write_output_csv(jid, results)
@@ -220,6 +232,7 @@ async def _wait_for_resume(
 
     Returns ``True`` if the job was cancelled, ``False`` if it was resumed.
     """
+    last_heartbeat = time.monotonic()
     while True:
         await asyncio.sleep(_PAUSE_POLL_INTERVAL)
         fresh = await svc.get_job(db, job_id, workspace_id)
@@ -227,6 +240,12 @@ async def _wait_for_resume(
             return False
         if fresh.status == BulkJobStatus.CANCELLED:
             return True
+        # Heartbeat while paused (audit findings #42/#50): a live pause must
+        # keep updated_at fresh so the reaper can distinguish it from a pause
+        # orphaned by a crashed worker.
+        if time.monotonic() - last_heartbeat >= _HEARTBEAT_INTERVAL:
+            await svc.increment_progress(db, job_id, workspace_id, count=0)
+            last_heartbeat = time.monotonic()
 
 
 def _read_input_csv(path: str) -> list[dict[str, str]]:

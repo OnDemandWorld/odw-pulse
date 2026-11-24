@@ -353,3 +353,98 @@ async def test_process_bulk_job_outcomes_for_non_pending_jobs(
 
     assert await process_bulk_job(running_id, session_factory=reap_factory) == "active"
     assert await process_bulk_job(done_id, session_factory=reap_factory) == "terminal"
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #50 — orphaned PAUSED jobs are recovered
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_reap_fails_orphaned_paused_but_not_live_pause(
+    reap_factory: async_sessionmaker[AsyncSession],
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    from pulse.api.schemas.bulk_job import BulkJobConfig
+    from tests.conftest import TEST_WORKSPACE_ID
+
+    svc = BulkJobService()
+    old = datetime.now(UTC) - timedelta(hours=1)
+    async with reap_factory() as db:
+        orphaned = await svc.create_job(
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=5
+        )
+        orphaned.status = BulkJobStatus.PAUSED
+        orphaned.updated_at = old
+        live = await svc.create_job(
+            db=db, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=5
+        )
+        live.status = BulkJobStatus.PAUSED  # fresh updated_at = live heartbeat
+        await db.commit()
+        orphaned_id, live_id = orphaned.id, live.id
+
+    stats = await reap_stale_jobs(session_factory=reap_factory, stale_after=timedelta(minutes=1))
+    assert stats["failed"] == 1
+
+    async with reap_factory() as db:
+        assert (await svc.get_job_unscoped(db, orphaned_id)).status == BulkJobStatus.FAILED
+        assert (await svc.get_job_unscoped(db, live_id)).status == BulkJobStatus.PAUSED
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #47/#48/#49 — Redis hardening
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_incr_uses_atomic_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pulse.core.redis_kv import RedisKV
+
+    class _StubClient:
+        def __init__(self) -> None:
+            self.eval_calls: list[Any] = []
+
+        async def eval(self, script: str, numkeys: int, *args: Any) -> list[int]:
+            self.eval_calls.append((script, numkeys, args))
+            return [5, 42]
+
+    kv = RedisKV(redis_url="redis://fake")
+    stub = _StubClient()
+
+    async def _client() -> Any:
+        return stub
+
+    monkeypatch.setattr(kv, "_client", _client)
+    count, retry_after = await kv.incr("pulse:ratelimit:login:1.2.3.4", 60)
+    assert (count, retry_after) == (5, 42)
+    assert len(stub.eval_calls) == 1
+    script, numkeys, args = stub.eval_calls[0]
+    assert "INCR" in script and "EXPIRE" in script and numkeys == 1
+    assert args == ("pulse:ratelimit:login:1.2.3.4", 60)
+
+
+def test_redact_url_strips_credentials() -> None:
+    from pulse.core.redis_kv import redact_url
+
+    assert redact_url("rediss://:s3cret@redis.internal:6380/0") == "rediss://redis.internal:6380/0"
+    assert redact_url("redis://redis:6379/0") == "redis://redis:6379/0"
+
+
+@pytest.mark.anyio
+async def test_push_job_bounds_stream_length() -> None:
+    from pulse.worker.redis_client import RedisClient
+
+    class _StubRedis:
+        def __init__(self) -> None:
+            self.xadd_kwargs: list[Any] = []
+
+        async def xadd(self, stream: str, fields: dict[str, str], **kwargs: Any) -> str:
+            self.xadd_kwargs.append(kwargs)
+            return "1-0"
+
+    client = RedisClient(redis_url="redis://fake")
+    stub = _StubRedis()
+    client._redis = stub
+    await client.push_job("job-1")
+    assert stub.xadd_kwargs[0].get("maxlen") == 10_000
+    assert stub.xadd_kwargs[0].get("approximate") is True

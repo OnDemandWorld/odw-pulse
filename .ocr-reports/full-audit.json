@@ -559,7 +559,9 @@
     "title": "Reaper marks live RUNNING jobs FAILED: progress is only written every 10 rows, which can exceed the 10-minute staleness window",
     "root_cause": "STALE_AFTER=10min assumes live jobs keep bumping updated_at, but worker/tasks.py writes progress only every PROGRESS_BATCH=10 rows and never heartbeats between batches. Ten slow LLM generations (timeouts + fallback, ~60-120s each) exceed the window. The worker's pause gate ignores FAILED, keeps processing, and its final commit overwrites the reaper's FAILED with SUCCEEDED — status flapping and false failure visible to users/webhooks. Related: #26.",
     "suggested_fix": "Heartbeat updated_at on a fixed timer (every 30-60s) independent of progress batches, or have the reaper check worker liveness/PEL ownership before failing; make the worker's final update conditional on not having been reaped.",
-    "failure_scenario": "A 100-row job where each generation takes 70s: after row 9 (~10.5 min without a DB write) the reaper sets FAILED + errors['_worker']; the user sees a failed job and may resubmit; 100 minutes later the original worker silently flips it to SUCCEEDED."
+    "failure_scenario": "A 100-row job where each generation takes 70s: after row 9 (~10.5 min without a DB write) the reaper sets FAILED + errors['_worker']; the user sees a failed job and may resubmit; 100 minutes later the original worker silently flips it to SUCCEEDED.",
+    "status": "fixed",
+    "verification_notes": "133 tests pass, ruff/mypy clean. Time-based heartbeats (30s) in the row loop and pause-wait keep updated_at fresh independent of PROGRESS_BATCH; reaper window no longer trips on slow rows. Verified via reaper tests + code path; heartbeat interval constant documented."
   },
   {
     "id": 43,
@@ -623,7 +625,9 @@
     "title": "Non-atomic INCR + EXPIRE can leave a rate-limit key without TTL, permanently locking a client IP out of login/register",
     "root_cause": "INCR creates the key; EXPIRE is a separate command issued only when count==1. If the process dies or Redis errors between them, the key persists with no TTL. On recovery, count>1 so EXPIRE is never retried, ttl returns -1, and the counter grows forever — count>limit on every subsequent request.",
     "suggested_fix": "Make it atomic: a Lua script (INCR + PEXPIRE when new), pipeline(transaction=True), or SET key 0 EX ttl NX followed by INCR; additionally, if TTL returns -1 for an existing key, set the expiry defensively.",
-    "failure_scenario": "First login attempt from an IP: INCR succeeds, then the connection drops before EXPIRE. After the 30s reprobe, every login/register from that IP returns 429 forever until an operator manually deletes pulse:ratelimit:login:<ip>."
+    "failure_scenario": "First login attempt from an IP: INCR succeeds, then the connection drops before EXPIRE. After the 30s reprobe, every login/register from that IP returns 429 forever until an operator manually deletes pulse:ratelimit:login:<ip>.",
+    "status": "fixed",
+    "verification_notes": "133 tests pass. incr() now runs an atomic Lua script (INCR+EXPIRE, defensive TTL=-1 repair). Regression test: test_incr_uses_atomic_script (stub client captures eval). Real-Redis execution pending Docker host."
   },
   {
     "id": 48,
@@ -635,7 +639,9 @@
     "title": "Full Redis URL (potentially including password) logged at INFO",
     "root_cause": "connect() logs self._redis_url verbatim; redis:// or rediss:// URLs can embed credentials (redis://:password@host). The same pattern exists in core/redis_kv.py:67. Logs are shipped to stdout/aggregators, leaking the Redis credential to anyone with log access.",
     "suggested_fix": "Log only scheme/host/port/db (parse the URL and strip userinfo), or redact userinfo before logging in both redis_client.py and redis_kv.py.",
-    "failure_scenario": "Production REDIS_URL=rediss://:s3cret@redis.internal:6380/0 -> every worker connect/reconnect writes the credential into centralized logs."
+    "failure_scenario": "Production REDIS_URL=rediss://:s3cret@redis.internal:6380/0 -> every worker connect/reconnect writes the credential into centralized logs.",
+    "status": "fixed",
+    "verification_notes": "133 tests pass. redact_url() strips userinfo; used in redis_client.connect and redis_kv._client logs. Regression test: test_redact_url_strips_credentials."
   },
   {
     "id": 49,
@@ -647,7 +653,9 @@
     "title": "Bulk-job stream grows without bound: XADD has no MAXLEN and nothing ever trims or deletes acked entries",
     "root_cause": "push_job appends with plain xadd; ack only removes entries from the PEL, not from the stream. No XTRIM/XDEL/MAXLEN anywhere in the codebase, so every job ever dispatched is retained in Redis memory forever — on the same instance that holds rate-limit and revocation state (#40).",
     "suggested_fix": "Use xadd(..., maxlen=N, approximate=True) with a sane cap, or periodically XTRIM MINID based on the group's last-delivered/acked id; consider XDEL after ack.",
-    "failure_scenario": "Months of production traffic: pulse:bulk_jobs accumulates millions of acked entries, Redis memory grows linearly until eviction/OOM, taking down rate limiting and token revocation with it."
+    "failure_scenario": "Months of production traffic: pulse:bulk_jobs accumulates millions of acked entries, Redis memory grows linearly until eviction/OOM, taking down rate limiting and token revocation with it.",
+    "status": "fixed",
+    "verification_notes": "133 tests pass. push_job uses xadd(maxlen=10000, approximate=True). Regression test: test_push_job_bounds_stream_length."
   },
   {
     "id": 50,
@@ -659,7 +667,9 @@
     "title": "PAUSED jobs orphaned by a worker crash are never recovered",
     "root_cause": "The reaper only handles RUNNING (fail) and PENDING (requeue). A worker blocked in _wait_for_resume holds the job in PAUSED; its stream message can be claimed and acked by another worker (skip path acks non-PENDING jobs, see #9), and if the paused worker then dies, no message and no reaper path remain. Resuming such a job sets RUNNING with nothing to process it.",
     "suggested_fix": "Include PAUSED in reaper recovery (re-enqueue paused jobs whose message is gone, or track worker ownership/heartbeat), and do not ack a claimed message unless its job is terminal or PENDING->RUNNING ownership was established.",
-    "failure_scenario": "User pauses a long job; worker B claims the idle message and acks it; worker A is killed in a rollout. The job stays PAUSED indefinitely; POST /resume flips it to RUNNING, no worker picks it up, and 10 minutes later the reaper marks it FAILED without processing a remaining row."
+    "failure_scenario": "User pauses a long job; worker B claims the idle message and acks it; worker A is killed in a rollout. The job stays PAUSED indefinitely; POST /resume flips it to RUNNING, no worker picks it up, and 10 minutes later the reaper marks it FAILED without processing a remaining row.",
+    "status": "fixed",
+    "verification_notes": "133 tests pass. Reaper fails stale PAUSED jobs (orphaned by crashed worker) with explicit _worker error; live pauses heartbeat so they are not reaped. Regression test: test_reap_fails_orphaned_paused_but_not_live_pause."
   },
   {
     "id": 51,

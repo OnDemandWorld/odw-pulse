@@ -68,6 +68,24 @@ async def reap_stale_jobs(
             job.updated_at = datetime.now(UTC)
             stats["failed"] += 1
 
+        # Paused jobs whose owning worker died (audit finding #50). Live
+        # pauses heartbeat updated_at from _wait_for_resume, so staleness
+        # here means the worker is gone; without this branch the job would
+        # be stranded PAUSED forever (resume sets RUNNING with no consumer).
+        result = await db.execute(
+            select(BulkJob).where(
+                BulkJob.status == BulkJobStatus.PAUSED,
+                BulkJob.updated_at < cutoff,
+            )
+        )
+        for job in result.scalars():
+            job.status = BulkJobStatus.FAILED
+            errors = dict(job.errors or {})
+            errors["_worker"] = "Paused job reaped: owning worker stopped responding"
+            job.errors = errors
+            job.updated_at = datetime.now(UTC)
+            stats["failed"] += 1
+
         # Jobs no consumer ever picked up.  Bump updated_at so the next
         # sweep does not requeue them again before a consumer catches up.
         result = await db.execute(
