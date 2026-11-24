@@ -288,3 +288,80 @@ async def test_pinned_backend_connects_to_validated_ip(
     await backend.connect_tcp("rebind.attacker.example", 443)
     assert captured["host"] == "93.184.216.34"
     assert captured["port"] == 443
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #83/#84/#85 — analytics + storage hardening
+# ---------------------------------------------------------------------------
+
+
+def test_mixpanel_token_cannot_be_overwritten() -> None:
+    from pulse.integrations.analytics.mixpanel import MixpanelConnector
+
+    connector = MixpanelConnector(project_token="real-token")
+    payload = connector.normalize(
+        {
+            "event_name": "x",
+            "user_id": "u1",
+            "properties": {"token": "evil-token", "distinct_id": "evil", "k": "v"},
+        }
+    )
+    assert payload["properties"]["token"] == "real-token"
+    assert payload["properties"]["distinct_id"] == "u1"
+    assert payload["properties"]["k"] == "v"
+
+
+@pytest.mark.anyio
+async def test_analytics_send_logs_failed_delivery() -> None:
+    from pulse.integrations.analytics.ga4 import GA4Connector
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(403))
+    connector = GA4Connector(
+        measurement_id="G-TEST",
+        api_secret="s",
+        http_client=httpx.AsyncClient(transport=transport),
+    )
+    # Must not raise, but must not silently swallow either (log warning).
+    await connector.send({"event_name": "x", "user_id": "u"})
+
+
+@pytest.mark.anyio
+async def test_storage_requests_are_sigv4_signed() -> None:
+    from pulse.integrations.storage.client import StorageClient
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, headers={"ETag": '"abc"'})
+
+    client = StorageClient(
+        endpoint="http://minio:9000",
+        access_key="AK",
+        secret_key="SK",
+        bucket="b",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    await client.upload_file("report final.csv", b"data")
+    await client.download_file("report final.csv")
+
+    for request in seen:
+        auth = request.headers.get("Authorization", "")
+        assert auth.startswith("AWS4-HMAC-SHA256 Credential=AK/")
+        assert "Signature=" in auth
+        assert request.headers.get("x-amz-content-sha256")
+    # The signed canonical resource must match the encoded URL path.
+    assert "/b/report%20final.csv" in str(seen[0].url)
+
+
+@pytest.mark.anyio
+async def test_presigned_url_uses_sigv4_query_auth() -> None:
+    from pulse.integrations.storage.client import StorageClient
+
+    client = StorageClient(
+        endpoint="http://minio:9000", access_key="AK", secret_key="SK", bucket="b"
+    )
+    url = await client.get_presigned_url("report final.csv")
+    assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in url
+    assert "X-Amz-Signature=" in url
+    assert "/b/report%20final.csv?" in url

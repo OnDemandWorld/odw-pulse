@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import structlog
 
 from pulse.config import get_settings
 from pulse.integrations.analytics.base import AnalyticsConnector
+
+logger = structlog.get_logger()
 
 
 class SegmentConnector(AnalyticsConnector):
@@ -47,11 +50,14 @@ class SegmentConnector(AnalyticsConnector):
         payload = self.normalize(event)
         if not self._write_key:
             return  # silently skip when not configured
-        await self._http.post(
+        response = await self._http.post(
             self.TRACK_URL,
             json=payload,
             auth=(self._write_key, ""),
         )
+        if response.status_code >= 400:
+            # Audit finding #84: failed deliveries must be visible.
+            logger.warning("segment delivery failed", status_code=response.status_code)
 
     # ------------------------------------------------------------------
     # Lifecycle

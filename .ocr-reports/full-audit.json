@@ -1129,7 +1129,9 @@
     "title": "Event properties can overwrite the Mixpanel project token",
     "root_cause": "properties is seeded with {'token': self._project_token, ...} and then properties.update(event.get('properties', {})) lets any event property named 'token' replace the credential. (Connector currently has no call sites, so this is latent.)",
     "suggested_fix": "Apply event properties first, then force token/distinct_id/source afterwards, or strip reserved keys from event properties.",
-    "failure_scenario": "An event whose properties include {'token': '<other-project-token>'} is imported into a different Mixpanel project (or rejected), corrupting analytics attribution once the connector is wired up."
+    "failure_scenario": "An event whose properties include {'token': '<other-project-token>'} is imported into a different Mixpanel project (or rejected), corrupting analytics attribution once the connector is wired up.",
+    "status": "fixed",
+    "verification_notes": "167 tests pass, ruff/mypy clean. Mixpanel normalize applies event properties first, then forces token/source/distinct_id. Regression test: test_mixpanel_token_cannot_be_overwritten."
   },
   {
     "id": 84,
@@ -1141,7 +1143,9 @@
     "title": "Analytics send() ignores HTTP response status: failed deliveries are silently lost",
     "root_cause": "GA4 send posts without raise_for_status or any status check; Mixpanel (mixpanel.py:62-65) and Segment (segment.py:50-54) share the pattern. 4xx/5xx responses are treated as success. Latent today (no call sites), but defeats the purpose once wired.",
     "suggested_fix": "Call response.raise_for_status() (or check status and log/count failures) in all three connectors; consider bounded retry for 5xx.",
-    "failure_scenario": "GA4 api_secret rotated/expired -> every POST returns 403 -> send() returns normally, callers believe events were delivered, and all analytics data is silently dropped."
+    "failure_scenario": "GA4 api_secret rotated/expired -> every POST returns 403 -> send() returns normally, callers believe events were delivered, and all analytics data is silently dropped.",
+    "status": "fixed",
+    "verification_notes": "167 tests pass. GA4/Mixpanel/Segment send() log a warning on >=400 responses (fail-soft but visible). Regression test: test_analytics_send_logs_failed_delivery."
   },
   {
     "id": 85,
@@ -1153,7 +1157,9 @@
     "title": "Presigned URL signs the raw key while the request path is percent-encoded; upload/download send no authentication at all",
     "root_cause": "_sign builds string_to_sign with the unencoded key but _object_url percent-encodes it, so for keys with spaces/unicode/+ the signature won't match the canonical resource S3/MinIO computes. Additionally upload_file/download_file PUT/GET without any Authorization header, so they only work against public buckets. Latent: no call sites yet — but #7's recommended fix routes bulk payloads through this client.",
     "suggested_fix": "Sign the same encoded resource that appears in the URL (or implement SigV4 properly), and add request signing to upload_file/download_file before this client is used against private buckets.",
-    "failure_scenario": "get_presigned_url('report final.csv') -> URL path /bucket/report%20final.csv but signature computed over '/bucket/report final.csv' -> S3/MinIO returns 403 SignatureDoesNotMatch; upload_file to a private bucket returns 403 AccessDenied."
+    "failure_scenario": "get_presigned_url('report final.csv') -> URL path /bucket/report%20final.csv but signature computed over '/bucket/report final.csv' -> S3/MinIO returns 403 SignatureDoesNotMatch; upload_file to a private bucket returns 403 AccessDenied.",
+    "status": "fixed",
+    "verification_notes": "167 tests pass. StorageClient now uses real AWS SigV4: header auth for upload/download, query presigning for get_presigned_url; canonical resource matches the percent-encoded URL path. Regression tests: test_storage_requests_are_sigv4_signed, test_presigned_url_uses_sigv4_query_auth. Live MinIO verification pending Docker host."
   },
   {
     "id": 86,
