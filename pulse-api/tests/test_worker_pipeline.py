@@ -53,12 +53,14 @@ async def test_create_bulk_job_falls_back_to_in_process(
     import pulse.api.v1.bulk_jobs as bulk_jobs
 
     processed: list[str] = []
+    done = asyncio.Event()
 
     async def _enqueue_unavailable(job_id: str) -> bool:
         return False
 
     async def _fake_in_process(job_id: str) -> None:
         processed.append(job_id)
+        done.set()
 
     monkeypatch.setattr(bulk_jobs, "enqueue_job", _enqueue_unavailable)
     monkeypatch.setattr(bulk_jobs, "_run_in_process", _fake_in_process)
@@ -68,7 +70,8 @@ async def test_create_bulk_job_falls_back_to_in_process(
     assert response.status_code == 201
     job_id = response.json()["id"]
 
-    await asyncio.sleep(0.05)  # let the fallback task run
+    # Audit finding #80: synchronize on the task instead of a 50ms sleep.
+    await asyncio.wait_for(done.wait(), timeout=2.0)
     assert processed == [job_id]
 
 

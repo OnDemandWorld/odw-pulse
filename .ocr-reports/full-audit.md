@@ -221,8 +221,8 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#77 — test_update_content_status never updates a status** (`tests/test_content.py:110-130`)
 - [x] **#78 — test_ingest_event_updates_variant_metrics never checks a metric** (`tests/test_experiments.py:176-247`)
 - [x] **#79 — Storage test's mock transport masks the unauthenticated S3 request** (`tests/test_integrations.py:73-92`)
-- [ ] **#80 — In-process fallback test relies on a 50ms sleep (flaky)** (`tests/test_worker_pipeline.py:66-72`)
-- [ ] **#81 — conftest builds a private FastAPI app, not create_app(); production wiring untested** (`tests/conftest.py:203-258`)
+- [x] **#80 — In-process fallback test relies on a 50ms sleep (flaky)** (`tests/test_worker_pipeline.py:66-72`)
+- [x] **#81 — conftest builds a private FastAPI app, not create_app(); production wiring untested** (`tests/conftest.py:203-258`)
 - [x] **#102 — .gitignore missing .venv/ (the name CLAUDE.md's setup uses)** (`.gitignore:26-28`)
 
 ---

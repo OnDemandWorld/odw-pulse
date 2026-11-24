@@ -1005,7 +1005,7 @@
     "suggested_fix": "Add kubeconform/kubeval schema validation and a semantic check (e.g. grep for $(VAR) references not defined earlier in the same env list), or rename the step to 'YAML syntax check'.",
     "failure_scenario": "A PR introduces a manifest that parses as YAML but cannot deploy (as the current ones do) -> CI stays green -> defect reaches the cluster.",
     "status": "fixed",
-    "verification_notes": "CI now: (1) semantic manifest check —  refs must be defined earlier in the same env list; (2) new migrations-postgres job runs alembic upgrade/downgrade/upgrade against a real PostgreSQL 16 service container. CI execution pending push."
+    "verification_notes": "CI now: (1) semantic manifest check — $(VAR) references must be defined earlier in the same container env list (envFrom does not participate); (2) new migrations-postgres job runs alembic upgrade head / downgrade base / upgrade head against a real PostgreSQL 16 service container. CI execution pending push."
   },
   {
     "id": 73,
@@ -1115,7 +1115,9 @@
     "title": "In-process fallback test relies on a 50ms sleep, making it timing-flaky",
     "root_cause": "test_create_bulk_job_falls_back_to_in_process waits for the background fallback task with 'await asyncio.sleep(0.05)' instead of synchronizing on the task; under CI load the task may not have run within 50ms.",
     "suggested_fix": "Expose/await the created task (capture it via the monkeypatched _run_in_process with an asyncio.Event, or await pending tasks) instead of sleeping.",
-    "failure_scenario": "Slow/loaded CI runner -> fallback task hasn't appended to 'processed' within 50ms -> assertion fails intermittently, eroding trust in the suite."
+    "failure_scenario": "Slow/loaded CI runner -> fallback task hasn't appended to 'processed' within 50ms -> assertion fails intermittently, eroding trust in the suite.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass, ruff/mypy clean. Fallback test synchronizes on an asyncio.Event set by the fake processor (2s timeout) instead of a 50ms sleep."
   },
   {
     "id": 81,
@@ -1127,7 +1129,9 @@
     "title": "app_fixture rebuilds a private FastAPI app instead of using pulse.main.create_app",
     "root_cause": "The fixture constructs its own FastAPI() with different CORS settings and re-includes routers manually, so nearly all API tests run against an app that can diverge from production wiring (middleware order, the production default-secret guard, root health routes absent). Only test_health.py imports the real app. This is a root cause of the production-wiring defects (#1, #53) going undetected.",
     "suggested_fix": "Build the fixture from pulse.main.create_app() (with test settings) and apply dependency_overrides to it, so router/middleware wiring regressions are caught.",
-    "failure_scenario": "A change to main.py drops or misorders a middleware/router -> all fixture-based tests still pass against the hand-built app -> production app is broken while CI is green."
+    "failure_scenario": "A change to main.py drops or misorders a middleware/router -> all fixture-based tests still pass against the hand-built app -> production app is broken while CI is green.",
+    "status": "fixed",
+    "verification_notes": "168 tests pass against the REAL create_app() wiring (middleware order, routers, guards) with DB dependency overrides — the hand-built FastAPI() is gone. Full suite green confirms production wiring matches test expectations."
   },
   {
     "id": 82,
