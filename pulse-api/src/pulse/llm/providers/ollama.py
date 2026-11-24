@@ -49,7 +49,13 @@ class OllamaProvider(LLMProvider):
             )
         return self._client
 
-    async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> LLMResponse:
+    async def generate(
+        self,
+        prompt: str,
+        params: dict[str, Any] | None = None,
+        *,
+        system: str | None = None,
+    ) -> LLMResponse:
         """Generate text using Ollama API.
 
         Args:
@@ -71,6 +77,8 @@ class OllamaProvider(LLMProvider):
                 "temperature": temperature,
             },
         }
+        if system:
+            payload["system"] = system
 
         # Add optional parameters
         if "max_tokens" in params:

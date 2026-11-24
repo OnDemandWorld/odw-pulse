@@ -221,11 +221,18 @@ class CulturalAdaptationEngine:
             if key in dimensions and isinstance(dimensions[key], (int, float)):
                 dimensions[key] = max(0.0, min(1.0, dimensions[key] + delta))
 
-        # Apply explicit overrides last (highest priority)
-        dimensions.update(overrides)
+        # Apply explicit overrides last (highest priority). Audit finding
+        # #13: only known dimension keys are accepted, and persuasion_style
+        # must be one of the supported styles — arbitrary user text must not
+        # reach the system prompt.
+        allowed_keys = set(_DEFAULT_DIMENSIONS) | {"persuasion_style"}
+        sanitized = {k: v for k, v in overrides.items() if k in allowed_keys}
+        dimensions.update(sanitized)
 
         # Extract persuasion_style separately (it's a string, not a float)
         persuasion_style = dimensions.pop("persuasion_style", "logical")
+        if persuasion_style not in ("logical", "emotional", "authority", "social_proof"):
+            persuasion_style = "logical"
 
         # Validate and clamp float dimensions to [0, 1]
         for key, value in dimensions.items():

@@ -135,26 +135,32 @@ class GenerationOrchestrator:
             context,
         )
 
-        full_prompt = f"{composed['system']}\n\n{composed['user']}"
-
         # Step 5: Select LLM provider via fallback router
         provider = await self._router.route_request()
 
-        # Step 6: Call provider
-        llm_response = await provider.generate(full_prompt, request.llm_params)
+        # Step 6: Call provider. System and user prompts are sent separately
+        # so the cultural/brand guidelines keep system-role authority
+        # (audit finding #14).
+        llm_response = await provider.generate(
+            composed["user"], request.llm_params, system=composed["system"]
+        )
 
         # Record success/failure for circuit breaker
         if llm_response.finish_reason == "error":
-            await self._router.record_failure()
+            status_code = llm_response.metadata.get("status_code")
+            # Audit finding #15: client-caused 4xx errors (bad params/model)
+            # must not trip the global breaker for every tenant. Only
+            # server-side/network failures count against provider health.
+            if not isinstance(status_code, int) or status_code >= 500:
+                await self._router.record_failure(provider.provider_name)
             # Never return a provider failure as a successful result: an
             # empty-text "success" would mark bulk jobs SUCCEEDED with no
             # content. Propagate so callers record a real failure.
-            status_code = llm_response.metadata.get("status_code")
             raise GenerationError(
                 "LLM provider failed to generate content",
                 status_code=int(status_code) if isinstance(status_code, int) else None,
             )
-        await self._router.record_success()
+        await self._router.record_success(provider.provider_name)
 
         # Step 7: Run quality scoring
         quality_result = self._quality_engine.score(

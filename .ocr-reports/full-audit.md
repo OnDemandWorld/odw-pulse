@@ -92,11 +92,11 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 ## MEDIUM severity (46)
 
 ### Generation / LLM / cultural
-- [ ] **#13 — Prompt injection: unsanitized content_type/market/overrides interpolated into system prompt** (`generation/orchestrator.py:122-136`) — allowlist content_type, locale-pattern market, enum persuasion_style; also via bulk CSV.
-- [ ] **#14 — System prompt flattened into one user message; instruction hierarchy defeated** (`generation/orchestrator.py:138-144`) — pass system/user separately; use provider system roles.
-- [ ] **#15 — Client-caused 4xx trips the global circuit breaker for all tenants** (`generation/orchestrator.py:146-150`) — count only 5xx/network/timeout toward the breaker.
-- [ ] **#16 — record_failure is provider-agnostic; secondary failures reset the recovery timer forever** (`llm/fallback_router.py:117-127`) — track which provider failed; timestamp the OPEN transition.
-- [ ] **#17 — HALF_OPEN admits unlimited concurrent probes to a possibly-dead primary** (`llm/fallback_router.py:98-105`) — cap in-flight probes; route the rest to secondary.
+- [x] **#13 — Prompt injection: unsanitized content_type/market/overrides interpolated into system prompt** (`generation/orchestrator.py:122-136`) — allowlist content_type, locale-pattern market, enum persuasion_style; also via bulk CSV.
+- [x] **#14 — System prompt flattened into one user message; instruction hierarchy defeated** (`generation/orchestrator.py:138-144`) — pass system/user separately; use provider system roles.
+- [x] **#15 — Client-caused 4xx trips the global circuit breaker for all tenants** (`generation/orchestrator.py:146-150`) — count only 5xx/network/timeout toward the breaker.
+- [x] **#16 — record_failure is provider-agnostic; secondary failures reset the recovery timer forever** (`llm/fallback_router.py:117-127`) — track which provider failed; timestamp the OPEN transition.
+- [x] **#17 — HALF_OPEN admits unlimited concurrent probes to a possibly-dead primary** (`llm/fallback_router.py:98-105`) — cap in-flight probes; route the rest to secondary.
 - [ ] **#18 — Language-only cultural fallback picks first dict-order region (zh-TW→zh-CN, pt-PT→pt-BR…)** (`cultural/engine.py:188-194`) — explicit language-default map or DB fallback_code chain.
 - [ ] **#19 — Brand voice loading is dead code; brand_voice_id silently ignored** (`generation/orchestrator.py:96-119`) — implement the lookup or document as unsupported.
 - [ ] **#20 — DB market profiles never loaded: production orchestrator has no session factory** (`generation/orchestrator.py:99-104`) — wire the factory in `get_orchestrator()`.

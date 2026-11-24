@@ -57,7 +57,13 @@ class AnthropicProvider(LLMProvider):
             )
         return self._client
 
-    async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> LLMResponse:
+    async def generate(
+        self,
+        prompt: str,
+        params: dict[str, Any] | None = None,
+        *,
+        system: str | None = None,
+    ) -> LLMResponse:
         """Generate text using Anthropic Messages API.
 
         Args:
@@ -72,12 +78,14 @@ class AnthropicProvider(LLMProvider):
         temperature = params.get("temperature", 0.7)
         max_tokens = params.get("max_tokens", 1024)
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if system:
+            payload["system"] = system
 
         # Add optional parameters
         for key in ("top_p", "top_k", "stop_sequences"):

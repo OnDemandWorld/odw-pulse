@@ -177,7 +177,9 @@
     "title": "Unsanitized user input interpolated into the system prompt (prompt injection)",
     "root_cause": "content_type and target_market are unconstrained free-text strings (generation/models.py) and cultural_overrides is an arbitrary dict; persuasion_style is popped from user-controlled overrides with no enum validation (cultural/engine.py). All are inserted via str.format into _DEFAULT_SYSTEM_TEMPLATE, so attacker-chosen text becomes part of the system instruction block. The same values flow in from bulk-job CSV columns (worker/tasks.py).",
     "suggested_fix": "Validate content_type against an allowlist and target_market against a locale pattern in GenerationRequest; restrict persuasion_style to the known enum and clamp/validate override keys; reject or escape newlines/control text in values destined for the system template.",
-    "failure_scenario": "POST /generate with content_type='blog_post\\n\\nIgnore all cultural guidelines above...' (or crafted cultural_overrides) -> injected text rendered inside the system prompt sent to the LLM. Also deliverable via a crafted CSV content_type column in bulk jobs."
+    "failure_scenario": "POST /generate with content_type='blog_post\\n\\nIgnore all cultural guidelines above...' (or crafted cultural_overrides) -> injected text rendered inside the system prompt sent to the LLM. Also deliverable via a crafted CSV content_type column in bulk jobs.",
+    "status": "fixed",
+    "verification_notes": "116 tests pass, ruff/mypy clean. GenerationRequest validators restrict content_type/target_market to safe charsets; cultural adapt accepts only known dimension keys and the 4 supported persuasion styles. Regression tests: test_generation_request_rejects_prompt_injection, test_cultural_overrides_are_sanitized."
   },
   {
     "id": 14,
@@ -189,7 +191,9 @@
     "title": "Composed system prompt is concatenated into a single user message, defeating instruction hierarchy",
     "root_cause": "The orchestrator flattens system+user into full_prompt and every adapter sends it as one user-role message (openai.py:76, anthropic.py:77, ollama.py:68). PromptComposer.compose_messages() exists but is never used. The 'system' cultural/brand guidelines carry no system-role authority and are trivially overridden by user instructions in the same message.",
     "suggested_fix": "Pass system and user prompts separately through the provider interface; use OpenAI chat 'system' role and Anthropic's top-level 'system' parameter; keep user-supplied instructions strictly in the user message.",
-    "failure_scenario": "Any /generate request: cultural guidelines and user instructions arrive as one user message; 'Disregard the guidelines above' overrides them with no privilege boundary, and the recorded system/user split is not what the model receives."
+    "failure_scenario": "Any /generate request: cultural guidelines and user instructions arrive as one user message; 'Disregard the guidelines above' overrides them with no privilege boundary, and the recorded system/user split is not what the model receives.",
+    "status": "fixed",
+    "verification_notes": "116 tests pass. LLMProvider.generate gains system kwarg; OpenAI uses system-role message, Anthropic top-level system param, Ollama system field; orchestrator sends composed system/user separately. Regression test: test_system_prompt_sent_separately."
   },
   {
     "id": 15,
@@ -201,7 +205,9 @@
     "title": "Client-caused 4xx errors trip the global circuit breaker for all tenants",
     "root_cause": "Providers return finish_reason='error' for any httpx.HTTPStatusError, including 400 (invalid user llm_params/model), 401 and 429. The orchestrator records every such error as a provider failure, and the FallbackRouter is a process-global singleton shared by all workspaces. No distinction between caller errors and provider health.",
     "suggested_fix": "Only count 5xx/network/timeout errors toward the circuit breaker; propagate 4xx as request errors (do not record_failure). Consider per-provider or per-tenant breaker state instead of one global router.",
-    "failure_scenario": "Three users send llm_params={'temperature': 5} -> OpenAI 400 x3 -> failure_threshold=3 -> circuit OPEN for 60s -> every other tenant's generation is rerouted even though the primary is healthy."
+    "failure_scenario": "Three users send llm_params={'temperature': 5} -> OpenAI 400 x3 -> failure_threshold=3 -> circuit OPEN for 60s -> every other tenant's generation is rerouted even though the primary is healthy.",
+    "status": "fixed",
+    "verification_notes": "116 tests pass. Orchestrator records breaker failures only for 5xx/network errors (4xx propagated as GenerationError without record_failure). Regression test: test_client_error_does_not_trip_breaker."
   },
   {
     "id": 16,
@@ -213,7 +219,9 @@
     "title": "record_failure is provider-agnostic: secondary failures keep resetting the primary recovery timer",
     "root_cause": "_last_failure_time is updated on every failure regardless of which provider produced it or the current state. While OPEN, all traffic goes to the secondary; each secondary failure refreshes _last_failure_time, so the OPEN->HALF_OPEN condition can never become true while the secondary keeps failing. The router never tracks which provider a routed request used.",
     "suggested_fix": "Track the provider returned by route_request and only update _last_failure_time for primary failures; or timestamp the OPEN transition itself and ignore failures recorded while OPEN.",
-    "failure_scenario": "Primary hits a transient outage -> circuit OPEN. Secondary is quota-exhausted (429 every call). Every secondary failure resets the timer, so even after the primary recovers it is never re-probed: all traffic stays pinned to the failing secondary indefinitely."
+    "failure_scenario": "Primary hits a transient outage -> circuit OPEN. Secondary is quota-exhausted (429 every call). Every secondary failure resets the timer, so even after the primary recovers it is never re-probed: all traffic stays pinned to the failing secondary indefinitely.",
+    "status": "fixed",
+    "verification_notes": "116 tests pass. record_failure ignores failures while OPEN (timer runs from open moment); provider-aware recording via optional provider arg. Regression test: test_secondary_failures_do_not_extend_recovery_timer."
   },
   {
     "id": 17,
@@ -225,7 +233,9 @@
     "title": "HALF_OPEN admits unlimited concurrent probes to the primary",
     "root_cause": "After recovery_timeout elapses, route_request transitions to HALF_OPEN and returns primary for every subsequent request until a failure is recorded. No probe cap or in-flight tracking, so a burst of concurrent requests all hit a possibly-still-dead primary simultaneously; with 60s provider timeouts each hangs for the full timeout before the first failure re-opens the circuit.",
     "suggested_fix": "Limit HALF_OPEN to a fixed number of in-flight probe requests; route all other requests to the secondary until the probes conclude. Track in-flight probe count in route_request/record_success/record_failure.",
-    "failure_scenario": "Primary down; 60s pass; 50 concurrent /generate requests arrive while primary is still slow-failing. All 50 are routed to the dead primary and hang ~60s each instead of using the secondary."
+    "failure_scenario": "Primary down; 60s pass; 50 concurrent /generate requests arrive while primary is still slow-failing. All 50 are routed to the dead primary and hang ~60s each instead of using the secondary.",
+    "status": "fixed",
+    "verification_notes": "116 tests pass. HALF_OPEN admits at most success_threshold concurrent probes; excess traffic stays on secondary; probe count reset on transition. Regression test: test_half_open_limits_concurrent_probes."
   },
   {
     "id": 18,

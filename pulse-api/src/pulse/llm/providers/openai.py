@@ -56,7 +56,13 @@ class OpenAIProvider(LLMProvider):
             )
         return self._client
 
-    async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> LLMResponse:
+    async def generate(
+        self,
+        prompt: str,
+        params: dict[str, Any] | None = None,
+        *,
+        system: str | None = None,
+    ) -> LLMResponse:
         """Generate text using OpenAI Chat Completions API.
 
         Args:
@@ -71,9 +77,13 @@ class OpenAIProvider(LLMProvider):
         temperature = params.get("temperature", 0.7)
         max_tokens = params.get("max_tokens", 1024)
 
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
