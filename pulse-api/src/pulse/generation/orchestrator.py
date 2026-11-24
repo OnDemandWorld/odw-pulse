@@ -8,12 +8,16 @@ to produce the final generated content.
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 
+from sqlalchemy import select
+
 from pulse.cultural.engine import CulturalAdaptationEngine
-from pulse.cultural.market_profile import load_market_profile
+from pulse.cultural.market_profile import load_market_profile_with_fallback
 from pulse.generation.models import GenerationError, GenerationRequest, GenerationResult
 from pulse.llm.fallback_router import FallbackRouter
+from pulse.models.brand_voice import BrandVoice
 from pulse.prompts.composer import PromptComposer
 from pulse.quality.engine import QualityScoringEngine
 
@@ -71,7 +75,12 @@ class GenerationOrchestrator:
         self._quality_engine = quality_engine or QualityScoringEngine()
         self._db_session_factory = db_session_factory
 
-    async def generate(self, request: GenerationRequest) -> GenerationResult:
+    async def generate(
+        self,
+        request: GenerationRequest,
+        *,
+        workspace_id: uuid.UUID | None = None,
+    ) -> GenerationResult:
         """Execute the full generation pipeline.
 
         Steps:
@@ -92,16 +101,36 @@ class GenerationOrchestrator:
         """
         start_time = time.time()
 
-        # Step 1 & 2: Load market profile and brand voice (if DB available)
+        # Step 1 & 2: Load market profile and brand voice (if DB available).
+        # Audit findings #19/#20: production callers now pass a session
+        # factory, and brand_voice_id is actually looked up (workspace-scoped).
         market_dimensions: dict[str, Any] = {}
         brand_voice_data: dict[str, Any] = {}
 
         if self._db_session_factory:
             async with self._db_session_factory() as session:
                 if request.target_market:
-                    profile = await load_market_profile(session, request.target_market)
+                    profile = await load_market_profile_with_fallback(
+                        session, request.target_market
+                    )
                     if profile:
                         market_dimensions = profile.get("cultural_dimensions", {})
+                if request.brand_voice_id and workspace_id is not None:
+                    try:
+                        bv_id = uuid.UUID(request.brand_voice_id)
+                    except ValueError:
+                        bv_id = None
+                    if bv_id is not None:
+                        voice = (
+                            await session.execute(
+                                select(BrandVoice).where(
+                                    BrandVoice.id == bv_id,
+                                    BrandVoice.workspace_id == workspace_id,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if voice is not None:
+                            brand_voice_data = {"tone_profile": voice.tone_profile or {}}
 
         # Step 3: Run cultural adaptation
         cultural_directive = self._cultural_engine.adapt(

@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from pulse.api.deps import CurrentUser
+from pulse.db.session import get_session_factory
 from pulse.generation.models import GenerationError, GenerationRequest, GenerationResult
 from pulse.generation.orchestrator import GenerationOrchestrator
 from pulse.llm import FallbackRouter, get_registry
@@ -62,7 +63,12 @@ def get_orchestrator() -> GenerationOrchestrator:
             config=CircuitBreakerConfig(),
         )
 
-        _orchestrator = GenerationOrchestrator(fallback_router=fallback_router)
+        # Audit finding #20: wire the DB session factory so market-profile
+        # enrichment and brand-voice lookup actually run in production.
+        _orchestrator = GenerationOrchestrator(
+            fallback_router=fallback_router,
+            db_session_factory=get_session_factory(),
+        )
 
     return _orchestrator
 
@@ -84,7 +90,9 @@ async def generate(request: GenerationRequest, current_user: CurrentUser) -> Gen
     _ = current_user  # Authentication enforced by the dependency itself.
     try:
         orchestrator = get_orchestrator()
-        result = await orchestrator.generate(request)
+        result = await orchestrator.generate(
+            request, workspace_id=current_user.workspace_id
+        )
         return result
     except GenerationError as e:
         raise HTTPException(
@@ -117,7 +125,9 @@ async def generate_stream(
     _ = current_user  # Authentication enforced by the dependency itself.
     try:
         orchestrator = get_orchestrator()
-        result = await orchestrator.generate(request)
+        result = await orchestrator.generate(
+            request, workspace_id=current_user.workspace_id
+        )
 
         # Convert to SSE format (stub — single event)
         async def event_generator() -> Any:

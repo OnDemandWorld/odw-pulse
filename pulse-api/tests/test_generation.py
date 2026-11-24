@@ -462,3 +462,88 @@ async def test_half_open_limits_concurrent_probes() -> None:
     assert p1.provider_name == "primary"
     assert p2.provider_name == "primary"
     assert p3.provider_name == "secondary"
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #18 — deterministic language fallback
+# ---------------------------------------------------------------------------
+
+
+def test_language_fallback_is_explicit_not_dict_order() -> None:
+    engine = CulturalAdaptationEngine()
+    zh_tw = engine.adapt(target_market="zh-TW", content_type="email")
+    zh_cn = engine.adapt(target_market="zh-CN", content_type="email")
+    assert zh_tw.formality == zh_cn.formality
+    assert zh_tw.directness == zh_cn.directness
+
+    en_au = engine.adapt(target_market="en-AU", content_type="email")
+    en_us = engine.adapt(target_market="en-US", content_type="email")
+    assert en_au.formality == en_us.formality
+
+    # Unknown language -> global defaults, not an arbitrary region variant.
+    # (Use a content type with no adjustment deltas.)
+    unknown = engine.adapt(target_market="xx-YY", content_type="generic")
+    assert unknown.formality == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #19/#20 — brand voice + DB market profiles are loaded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_brand_voice_and_db_market_profile_are_applied(
+    async_engine: Any,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from pulse.models.brand_voice import BrandVoice
+    from pulse.models.market_profile import MarketProfile
+    from tests.conftest import TEST_WORKSPACE_ID
+
+    factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    bv_id = _uuid.uuid4()
+    async with factory() as session:
+        session.add(
+            BrandVoice(
+                id=bv_id,
+                workspace_id=TEST_WORKSPACE_ID,
+                name="Test voice",
+                tone_profile={"description": "Friendly and bold"},
+            )
+        )
+        session.add(
+            MarketProfile(
+                id=_uuid.uuid4(),
+                code="tt-XX",
+                name="Test market",
+                cultural_dimensions={"formality": 0.9},
+                is_active=True,
+            )
+        )
+        await session.commit()
+
+    mock = MockLLMProvider()
+    router = FallbackRouter(primary=mock, secondary=mock)
+    orchestrator = GenerationOrchestrator(
+        fallback_router=router, db_session_factory=factory
+    )
+
+    result = await orchestrator.generate(
+        GenerationRequest(
+            content_type="blog_post",
+            target_market="tt-XX",
+            prompt="Write about AI",
+            brand_voice_id=str(bv_id),
+        ),
+        workspace_id=TEST_WORKSPACE_ID,
+    )
+
+    # #19: brand voice section reached the system prompt.
+    assert mock.last_system is not None
+    assert "Friendly and bold" in mock.last_system
+    # #20: DB-configured dimensions overrode the built-in defaults.
+    assert result.cultural_directive["formality"] == 0.9

@@ -97,13 +97,13 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#15 — Client-caused 4xx trips the global circuit breaker for all tenants** (`generation/orchestrator.py:146-150`) — count only 5xx/network/timeout toward the breaker.
 - [x] **#16 — record_failure is provider-agnostic; secondary failures reset the recovery timer forever** (`llm/fallback_router.py:117-127`) — track which provider failed; timestamp the OPEN transition.
 - [x] **#17 — HALF_OPEN admits unlimited concurrent probes to a possibly-dead primary** (`llm/fallback_router.py:98-105`) — cap in-flight probes; route the rest to secondary.
-- [ ] **#18 — Language-only cultural fallback picks first dict-order region (zh-TW→zh-CN, pt-PT→pt-BR…)** (`cultural/engine.py:188-194`) — explicit language-default map or DB fallback_code chain.
-- [ ] **#19 — Brand voice loading is dead code; brand_voice_id silently ignored** (`generation/orchestrator.py:96-119`) — implement the lookup or document as unsupported.
-- [ ] **#20 — DB market profiles never loaded: production orchestrator has no session factory** (`generation/orchestrator.py:99-104`) — wire the factory in `get_orchestrator()`.
+- [x] **#18 — Language-only cultural fallback picks first dict-order region (zh-TW→zh-CN, pt-PT→pt-BR…)** (`cultural/engine.py:188-194`) — explicit language-default map or DB fallback_code chain.
+- [x] **#19 — Brand voice loading is dead code; brand_voice_id silently ignored** (`generation/orchestrator.py:96-119`) — implement the lookup or document as unsupported.
+- [x] **#20 — DB market profiles never loaded: production orchestrator has no session factory** (`generation/orchestrator.py:99-104`) — wire the factory in `get_orchestrator()`.
 
 ### Database / migrations / services
-- [ ] **#21 — Migration enum `bulk_job_status` omits 'paused' that the ORM writes** (`001_initial_schema.py:52-60`) — pause() 500s on PostgreSQL. Add the enum value.
-- [ ] **#22 — ~18 JSONB model columns created as plain JSON (schema drift)** (`001_initial_schema.py:113`) — use postgresql.JSONB; blocks future JSONB operators/GIN.
+- [x] **#21 — Migration enum `bulk_job_status` omits 'paused' that the ORM writes** (`001_initial_schema.py:52-60`) — pause() 500s on PostgreSQL. Add the enum value.
+- [x] **#22 — ~18 JSONB model columns created as plain JSON (schema drift)** (`001_initial_schema.py:113`) — use postgresql.JSONB; blocks future JSONB operators/GIN.
 - [ ] **#23 — performance_events excluded from RLS enable/policy/FORCE lists** (`001_initial_schema.py:904-921`) — unprotected tenant telemetry once RLS binds.
 - [ ] **#24 — Fixed partition windows, no DEFAULT partition, no maintenance job** (`001_initial_schema.py:852-886`) — weekly-partition inserts start failing **2027-01-04 (~6 weeks away)**; backdated rows fail today.
 - [ ] **#25 — Admin-session fallback to DATABASE_URL breaks login/register once RLS is enforced** (`db/session.py:112-131`) — fail fast; admin role needs BYPASSRLS (FORCE binds owners too).

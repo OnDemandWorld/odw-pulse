@@ -350,3 +350,14 @@ def test_partitioned_tables_include_partition_key_in_pk() -> None:
             assert constrained == {"content_piece_id", "workspace_id"}, (
                 f"{child.__tablename__} FK must be composite, got {constrained}"
             )
+
+
+def test_migration_enum_and_jsonb_match_models() -> None:
+    """Drift guard (audit #21/#22): migration 001 must include 'paused' and use JSONB."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src/pulse/db/migrations/versions/001_initial_schema.py"
+    text = src.read_text()
+    enum_block = text.split("bulk_job_status = sa.Enum(")[1].split(")")[0]
+    assert '"paused"' in enum_block
+    assert "sa.JSON" not in text, "migration must use postgresql.JSONB to match ORM models"

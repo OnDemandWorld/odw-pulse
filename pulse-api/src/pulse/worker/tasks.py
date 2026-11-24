@@ -141,7 +141,9 @@ async def process_bulk_job(
             # ---- generate ----
             try:
                 gen_req = _build_generation_request(row, config)
-                gen_result = await orchestrator.generate(gen_req)
+                gen_result = await orchestrator.generate(
+                    gen_req, workspace_id=job.workspace_id
+                )
                 results.append(
                     {
                         **row,

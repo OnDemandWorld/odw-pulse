@@ -20,6 +20,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "001_initial_schema"
@@ -52,6 +53,7 @@ def upgrade() -> None:
     bulk_job_status = sa.Enum(
         "pending",
         "running",
+        "paused",
         "succeeded",
         "failed",
         "cancelled",
@@ -110,7 +112,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid, server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("name", sa.Text, nullable=False),
         sa.Column("slug", sa.Text, nullable=False),
-        sa.Column("settings", sa.JSON, nullable=True),
+        sa.Column("settings", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -170,7 +172,7 @@ def upgrade() -> None:
             comment="ISO 639-1 language code optionally suffixed with a region, e.g. 'en-US'.",
         ),
         sa.Column("name", sa.Text, nullable=False),
-        sa.Column("cultural_dimensions", sa.JSON, nullable=True),
+        sa.Column("cultural_dimensions", postgresql.JSONB, nullable=True),
         sa.Column(
             "fallback_code",
             sa.Text,
@@ -194,7 +196,7 @@ def upgrade() -> None:
         ),
         sa.Column("prompt", sa.Text, nullable=False),
         sa.Column("response", sa.Text, nullable=False),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column("provider", sa.Text, nullable=True),
         sa.Column("model", sa.Text, nullable=True),
         sa.Column(
@@ -227,7 +229,7 @@ def upgrade() -> None:
         sa.Column("slug", sa.Text, nullable=False),
         sa.Column("title", sa.Text, nullable=False),
         sa.Column("body", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "status",
             sa.Enum(
@@ -282,7 +284,7 @@ def upgrade() -> None:
         sa.Column("workspace_id", sa.Uuid, nullable=False),
         sa.Column("version_number", sa.Integer, nullable=False),
         sa.Column("body", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "status",
             sa.Enum(
@@ -335,7 +337,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Uuid, nullable=True),
         sa.Column("action", sa.Text, nullable=False),
         sa.Column("comment", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -363,8 +365,8 @@ def upgrade() -> None:
         sa.Column("workspace_id", sa.Uuid, nullable=False),
         sa.Column("name", sa.Text, nullable=False),
         sa.Column("description", sa.Text, nullable=True),
-        sa.Column("tone_profile", sa.JSON, nullable=True),
-        sa.Column("guidelines", sa.JSON, nullable=True),
+        sa.Column("tone_profile", postgresql.JSONB, nullable=True),
+        sa.Column("guidelines", postgresql.JSONB, nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         comment="Brand voice / tone configuration per workspace.",
@@ -377,7 +379,7 @@ def upgrade() -> None:
         sa.Column("workspace_id", sa.Uuid, nullable=False),
         sa.Column("name", sa.Text, nullable=False),
         sa.Column("description", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -397,8 +399,8 @@ def upgrade() -> None:
         sa.Column("glossary_id", sa.Uuid, nullable=False),
         sa.Column("term", sa.Text, nullable=False),
         sa.Column("definition", sa.Text, nullable=True),
-        sa.Column("translations", sa.JSON, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("translations", postgresql.JSONB, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -434,7 +436,7 @@ def upgrade() -> None:
         sa.Column("progress", sa.Integer, server_default="0", nullable=False),
         sa.Column("input_file", sa.Text, nullable=True),
         sa.Column("output_file", sa.Text, nullable=True),
-        sa.Column("errors", sa.JSON, nullable=True),
+        sa.Column("errors", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -478,7 +480,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "details",
-            sa.JSON,
+            postgresql.JSONB,
             nullable=True,
             comment="Free-form structured payload describing the action.",
         ),
@@ -598,7 +600,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("hypothesis", sa.Text, nullable=True),
-        sa.Column("configuration", sa.JSON, nullable=True),
+        sa.Column("configuration", postgresql.JSONB, nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -633,7 +635,7 @@ def upgrade() -> None:
             nullable=False,
             comment="Relative traffic weight (normalised at assignment time).",
         ),
-        sa.Column("configuration", sa.JSON, nullable=True),
+        sa.Column("configuration", postgresql.JSONB, nullable=True),
         sa.Column(
             "position",
             sa.Integer,
@@ -716,7 +718,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.PrimaryKeyConstraint("id", "exposed_at"),
         sa.ForeignKeyConstraint(["experiment_id"], ["experiments.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["variant_id"], ["experiment_variants.id"], ondelete="CASCADE"),
@@ -762,7 +764,7 @@ def upgrade() -> None:
             nullable=False,
             comment="Numeric value of the metric (count, revenue, …).",
         ),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "received_at",
             sa.DateTime(timezone=True),
@@ -820,11 +822,11 @@ def upgrade() -> None:
         ),
         sa.Column(
             "variables",
-            sa.JSON,
+            postgresql.JSONB,
             nullable=True,
             comment="Schema describing expected template variables.",
         ),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "status",
             sa.Enum(

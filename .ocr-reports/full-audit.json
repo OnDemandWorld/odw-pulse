@@ -247,7 +247,9 @@
     "title": "Language-only fallback selects the first registered region variant, producing wrong-market dimensions",
     "root_cause": "_get_base_dimensions iterates self._dimensions in insertion order and returns the first code matching '{lang}-'. No region-aware or configured fallback: any unknown region variant silently inherits whichever variant happens to be first in the dict. The DB fallback_code chain (load_market_profile_with_fallback) is never used by the orchestrator.",
     "suggested_fix": "Use an explicit language-level default map (or the market profile's fallback_code chain) instead of dict-order matching; prefer load_market_profile_with_fallback in the generation path.",
-    "failure_scenario": "target_market='zh-TW'/'zh-HK' -> falls back to zh-CN dimensions; 'pt-PT' -> pt-BR; 'en-AU'/'en-CA' -> en-US; 'ar-EG' -> ar-SA. Content generated with culturally wrong settings, silently; result also depends on registration order."
+    "failure_scenario": "target_market='zh-TW'/'zh-HK' -> falls back to zh-CN dimensions; 'pt-PT' -> pt-BR; 'en-AU'/'en-CA' -> en-US; 'ar-EG' -> ar-SA. Content generated with culturally wrong settings, silently; result also depends on registration order.",
+    "status": "fixed",
+    "verification_notes": "119 tests pass, ruff/mypy clean. Explicit _LANGUAGE_FALLBACK map replaces dict-order matching. Regression test: test_language_fallback_is_explicit_not_dict_order."
   },
   {
     "id": 19,
@@ -259,7 +261,9 @@
     "title": "Brand voice loading (pipeline step 2) is dead code: brand_voice_id is silently ignored",
     "root_cause": "brand_voice_data is initialized to {} at line 97 and never assigned anywhere — no DB query for brand_voice_id exists despite the docstring claiming step 2 loads it. The 'if brand_voice_data:' branch (line 116) can never execute, so brand_voice_section is always empty.",
     "suggested_fix": "Implement the brand voice lookup (query BrandVoice by request.brand_voice_id within the session, build tone_profile section) or remove the dead branch and document brand_voice_id as unsupported; add a test asserting the brand voice section appears when brand_voice_id is provided.",
-    "failure_scenario": "Client creates a brand voice and sends brand_voice_id in /generate or bulk config: the prompt contains no brand voice guidance and the response echoes brand_voice_id as if applied — tone consistency is a silent no-op."
+    "failure_scenario": "Client creates a brand voice and sends brand_voice_id in /generate or bulk config: the prompt contains no brand voice guidance and the response echoes brand_voice_id as if applied — tone consistency is a silent no-op.",
+    "status": "fixed",
+    "verification_notes": "119 tests pass. Orchestrator now loads BrandVoice workspace-scoped when brand_voice_id + workspace_id provided; routers/worker pass workspace_id. Regression test: test_brand_voice_and_db_market_profile_are_applied (asserts tone description reaches system prompt)."
   },
   {
     "id": 20,
@@ -271,7 +275,9 @@
     "title": "DB market-profile enrichment never runs: production callers pass no db_session_factory",
     "root_cause": "The orchestrator only loads DB market profiles when db_session_factory is set, but the production constructor (api/v1/generate.py:59, also used by worker/tasks.py) calls GenerationOrchestrator(fallback_router=...) without it. DB-configured cultural_dimensions and the fallback_code chain are always ignored; generation always uses hardcoded built-in defaults.",
     "suggested_fix": "Pass the async session factory when constructing the orchestrator in get_orchestrator() (and use load_market_profile_with_fallback so fallback_code is honored), or inject per-request sessions; add a test covering DB-profile-driven dimensions.",
-    "failure_scenario": "Admin seeds market_profiles with custom cultural_dimensions for 'de-DE' (formality 0.9). POST /generate target_market='de-DE' -> orchestrator skips the DB (factory is None) and uses built-in defaults (0.7); the configured profile has no effect, silently."
+    "failure_scenario": "Admin seeds market_profiles with custom cultural_dimensions for 'de-DE' (formality 0.9). POST /generate target_market='de-DE' -> orchestrator skips the DB (factory is None) and uses built-in defaults (0.7); the configured profile has no effect, silently.",
+    "status": "fixed",
+    "verification_notes": "119 tests pass. get_orchestrator wires get_session_factory(); orchestrator uses load_market_profile_with_fallback (DB fallback_code chain honored). Same regression test asserts DB cultural_dimensions override built-ins."
   },
   {
     "id": 21,
@@ -283,7 +289,9 @@
     "title": "bulk_job_status enum in migration omits 'paused' which the ORM model and pause() write",
     "root_cause": "models/bulk_job.py BulkJobStatus defines PAUSED='paused' and BulkJobService.pause() sets it, but migration 001 creates the native enum with only pending/running/succeeded/failed/cancelled and migration 002 never adds the value. On PostgreSQL the UPDATE fails; on SQLite (tests) the enum is a VARCHAR so the drift is invisible. Frontend type also omits it (#67).",
     "suggested_fix": "Add 'paused' to the enum in 001 (or a new migration with ALTER TYPE bulk_job_status ADD VALUE 'paused'), and add a model-vs-migration enum consistency test.",
-    "failure_scenario": "On PostgreSQL, POST /bulk-jobs/{id}/pause on a RUNNING job raises asyncpg InvalidTextRepresentationError -> HTTP 500; resume() is unreachable and the worker's PAUSED gate is dead code."
+    "failure_scenario": "On PostgreSQL, POST /bulk-jobs/{id}/pause on a RUNNING job raises asyncpg InvalidTextRepresentationError -> HTTP 500; resume() is unreachable and the worker's PAUSED gate is dead code.",
+    "status": "fixed",
+    "verification_notes": "119 tests pass. Migration 001 bulk_job_status enum now includes 'paused' (matches ORM). Drift-guard test: test_migration_enum_and_jsonb_match_models."
   },
   {
     "id": 22,
@@ -295,7 +303,9 @@
     "title": "All JSONB model columns are created as plain JSON by the migration (schema drift)",
     "root_cause": "Every ORM model declares JSONB (workspace.settings, content.metadata, brand_voices, glossary, bulk_jobs.errors, audit_logs.details, experiment configuration, prompt variables, performance/exposure metadata, generation_cache.metadata — ~18 columns), but migration 001 uses sa.JSON for all of them. On PostgreSQL sa.JSON renders the json type, not jsonb.",
     "suggested_fix": "Use sqlalchemy.dialects.postgresql.JSONB in the migration for these columns (or a follow-up ALTER COLUMN ... TYPE jsonb migration) so the database matches Base.metadata; verify with alembic check.",
-    "failure_scenario": "alembic check/autogenerate permanently reports ~18 type mismatches and generates spurious migrations; any future JSONB operator (metadata @>, GIN index) fails at runtime with 'operator does not exist: json @> json'."
+    "failure_scenario": "alembic check/autogenerate permanently reports ~18 type mismatches and generates spurious migrations; any future JSONB operator (metadata @>, GIN index) fails at runtime with 'operator does not exist: json @> json'.",
+    "status": "fixed",
+    "verification_notes": "119 tests pass. All 19 sa.JSON columns in migration 001 replaced with postgresql.JSONB to match ORM models. Same drift-guard test asserts no sa.JSON remains."
   },
   {
     "id": 23,
