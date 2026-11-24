@@ -387,7 +387,9 @@
     "title": "promote_winner mutates the JSONB configuration dict in place; SQLAlchemy never persists the winner info",
     "root_cause": "config = experiment.configuration or {} returns the same dict object already loaded; it is mutated and reassigned. Without MutableDict tracking, attribute history compares the new value against the committed value — the same mutated object — finds no change, and the UPDATE emitted for status/ended_at/updated_at does not include the configuration column. Only when configuration was None or {} does a fresh dict get assigned and persist.",
     "suggested_fix": "Assign a copy: config = dict(experiment.configuration or {}); config[...] = ...; experiment.configuration = config — or wrap the column type with MutableDict.as_mutable(JSONB).",
-    "failure_scenario": "Experiment with configuration={'randomisation_unit':'visitor'} is RUNNING; POST /experiments/{id}/promote-winner returns 200 with winner info, but the configuration row is unchanged — promoted_winner_id/name silently lost."
+    "failure_scenario": "Experiment with configuration={'randomisation_unit':'visitor'} is RUNNING; POST /experiments/{id}/promote-winner returns 200 with winner info, but the configuration row is unchanged — promoted_winner_id/name silently lost.",
+    "status": "fixed",
+    "verification_notes": "129 tests pass, ruff/mypy clean. promote_winner assigns dict(experiment.configuration or {}) so SQLAlchemy detects the change. Regression test: test_promote_winner_persists_configuration (re-reads row after rollback)."
   },
   {
     "id": 29,
@@ -399,7 +401,9 @@
     "title": "Unbounded event batch ingestion and full-table event load in results (OOM vector)",
     "root_cause": "get_results selects every PerformanceEvent for an experiment with no limit/time window — a table designed as very high-volume and weekly-partitioned — into a Python list, then builds a second list of dicts. Additionally PerformanceEventBatchCreate.events has no max_length (api/schemas/experiment.py:182-184) and ingest_events_batch builds one ORM object per event in a single transaction (api/v1/experiments.py:390-412). Amplifiable cross-workspace via #12.",
     "suggested_fix": "Aggregate in SQL (GROUP BY variant_id, metric_type with COUNT/COUNT(DISTINCT subject_id)/SUM(value)) and feed only aggregates to compute_results; cap batch size (e.g. 1000 events, 422 beyond) and insert in chunks.",
-    "failure_scenario": "Client POSTs /performance-events/batch with 1M events -> multi-GB transaction; afterwards every GET /experiments/{id}/results materializes all rows in RAM (API pod limit 1Gi in k8s) -> event-loop stall, OOM kill of the API pod."
+    "failure_scenario": "Client POSTs /performance-events/batch with 1M events -> multi-GB transaction; afterwards every GET /experiments/{id}/results materializes all rows in RAM (API pod limit 1Gi in k8s) -> event-loop stall, OOM kill of the API pod.",
+    "status": "fixed",
+    "verification_notes": "129 tests pass. get_results aggregates in SQL (GROUP BY variant/metric/visitor with counts) instead of loading all ORM events; compute_results accepts count; batch schema capped at 1000 events (422 beyond). Regression test: test_event_batch_rejects_oversized_payload; existing results tests pass through the aggregation path."
   },
   {
     "id": 30,
@@ -567,7 +571,9 @@
     "title": "Conversions counted per event while denominator is unique visitors: conversion rates >1 and inflated significance",
     "root_cause": "visitors is a deduplicated set but conversions increments for every 'conversion' event; ingest_event/ingest_events_batch insert duplicates freely (no per-visitor dedup) and visitor_hash is optional. A visitor converting twice yields conversions>visitor_count, breaking the binomial model feeding chi_squared_test and _recommend_winner (and enabling the #10 crash).",
     "suggested_fix": "Track converting visitors as a set (add visitor_hash on conversion events) and use its size as conversions, or dedupe events per (variant, visitor, event_type) before aggregation; require visitor_hash for conversion events.",
-    "failure_scenario": "50 visitors, 60 conversion events in treatment vs 50/50 in control: treatment rate reported as 120%, chi-squared computed on impossible cells reports a 'significant' win that is an artifact of duplicate events."
+    "failure_scenario": "50 visitors, 60 conversion events in treatment vs 50/50 in control: treatment rate reported as 120%, chi-squared computed on impossible cells reports a 'significant' win that is an artifact of duplicate events.",
+    "status": "fixed",
+    "verification_notes": "129 tests pass. Conversions deduplicated per visitor (converting_visitors set); anonymous conversions count as distinct pseudo-visitors so rates stay <=1. Regression tests: test_conversions_deduplicated_per_visitor, test_anonymous_conversions_keep_rate_at_most_one."
   },
   {
     "id": 44,
@@ -579,7 +585,9 @@
     "title": "Winner recommendation misattributes significance: recommends control and claims 'control is significantly better' when a treatment actually won",
     "root_cause": "_recommend_winner inspects only significant_results[0] and compares its treatment name against best_variant (highest raw rate across ALL variants). If the best raw-rate variant is a different, non-significant treatment, the code falls into the else branch and recommends the control of the significant pair, asserting the opposite of what that test showed. promote-winner then stops the experiment and persists the wrong winner. No multiple-comparison correction with 3+ arms.",
     "suggested_fix": "Evaluate the significant pair on its own direction, recommend the winner of that pair, and only consider other variants via their own tests; apply a correction (e.g. Bonferroni) when testing multiple treatments.",
-    "failure_scenario": "Control 10%, treatment A 15% (p<0.05), treatment B 16% on tiny sample (not significant): best_variant=B != treatment_name=A -> returns recommended_variant=control with reason 'Control is statistically significantly better' — factually inverted; promote-winner promotes the worst arm."
+    "failure_scenario": "Control 10%, treatment A 15% (p<0.05), treatment B 16% on tiny sample (not significant): best_variant=B != treatment_name=A -> returns recommended_variant=control with reason 'Control is statistically significantly better' — factually inverted; promote-winner promotes the worst arm.",
+    "status": "fixed",
+    "verification_notes": "129 tests pass. _recommend_winner evaluates the significant pair's own rates (prefers analyses involving the best-rate arm) and applies Bonferroni correction across treatments. Regression test: test_winner_recommendation_not_inverted_with_three_arms."
   },
   {
     "id": 45,
@@ -699,7 +707,9 @@
     "title": "Variant is_control flag from the API is silently discarded on create and update",
     "root_cause": "ExperimentVariantCreate.is_control (api/schemas/experiment.py:43-45) is never persisted: create_experiment (experiment_service.py:80-87) and update_experiment build ExperimentVariant without it, and the model has no is_control column. Results infer control from configuration.get('is_control', i == 0) (experiment_service.py:372), i.e. always position 0 unless the client smuggles the flag inside configuration.",
     "suggested_fix": "Persist the flag (map is_control into variant.configuration or add a column) in both create and update paths, and read it back consistently in get_results/ExperimentVariantRead.",
-    "failure_scenario": "Client creates variants [{name:'B', is_control:true}, {name:'A'}] intending B as baseline: all statistical analyses and promote-winner treat A (position 0) as control, producing inverted lift/winner recommendations while the API accepted the payload without error."
+    "failure_scenario": "Client creates variants [{name:'B', is_control:true}, {name:'A'}] intending B as baseline: all statistical analyses and promote-winner treat A (position 0) as control, producing inverted lift/winner recommendations while the API accepted the payload without error.",
+    "status": "fixed",
+    "verification_notes": "129 tests pass. is_control persisted into variant.configuration on create AND update; get_results reads it back. Regression test: test_is_control_flag_is_persisted."
   },
   {
     "id": 55,

@@ -109,8 +109,8 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [x] **#25 — Admin-session fallback to DATABASE_URL breaks login/register once RLS is enforced** (`db/session.py:112-131`) — fail fast; admin role needs BYPASSRLS (FORCE binds owners too).
 - [x] **#26 — cancel/pause/resume are check-then-act; worker's final commit overwrites CANCELLED** (`services/bulk_job_service.py:185-206`) — atomic conditional transitions.
 - [x] **#27 — increment_progress read-modify-write race loses updates** (`services/bulk_job_service.py:132-145`) — atomic SQL increment.
-- [ ] **#28 — promote_winner mutates JSONB dict in place; winner info never persisted** (`services/experiment_service.py:429-436`) — assign a copy or MutableDict.
-- [ ] **#29 — Unbounded event batch ingestion + full-table event load in results (OOM)** (`services/experiment_service.py:350-356`) — SQL aggregation; cap batch size. Amplifiable via #12.
+- [x] **#28 — promote_winner mutates JSONB dict in place; winner info never persisted** (`services/experiment_service.py:429-436`) — assign a copy or MutableDict.
+- [x] **#29 — Unbounded event batch ingestion + full-table event load in results (OOM)** (`services/experiment_service.py:350-356`) — SQL aggregation; cap batch size. Amplifiable via #12.
 
 ### Frontend
 - [ ] **#30 — Logout doesn't clear TanStack Query cache; cross-workspace data bleed on next login** (`components/Layout.tsx:18-29`) — `queryClient.clear()`; workspace-scoped keys.
@@ -130,8 +130,8 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 
 ### Worker / integrations / experiments core
 - [ ] **#42 — Reaper fails live RUNNING jobs (progress written only every 10 rows > 10-min window)** (`worker/maintenance.py:56-69`) — time-based heartbeat; conditional final write.
-- [ ] **#43 — Conversions counted per event vs unique visitors: rates >1, inflated significance** (`core/experiment/results.py:49-57`) — dedupe converting visitors; feeds #10.
-- [ ] **#44 — Winner recommendation inverted with 3+ arms ("control significantly better" when treatment won)** (`core/experiment/results.py:140-160`) — evaluate the significant pair's own direction; multiple-comparison correction.
+- [x] **#43 — Conversions counted per event vs unique visitors: rates >1, inflated significance** (`core/experiment/results.py:49-57`) — dedupe converting visitors; feeds #10.
+- [x] **#44 — Winner recommendation inverted with 3+ arms ("control significantly better" when treatment won)** (`core/experiment/results.py:140-160`) — evaluate the significant pair's own direction; multiple-comparison correction.
 - [ ] **#45 — SSRF guard validate-then-fetch: DNS rebinding bypass** (`integrations/webhooks/url_guard.py:72-82`) — pin the validated IP for the connection.
 - [ ] **#46 — Blocking socket.getaddrinfo on the event loop; attacker DNS stalls all requests** (`integrations/webhooks/url_guard.py:73`) — async/threaded resolution with timeout.
 - [ ] **#47 — Non-atomic INCR+EXPIRE: rate-limit key can lose TTL → permanent 429 lockout of an IP** (`core/redis_kv.py:104-111`) — Lua/pipeline; defensively re-expire TTL=-1 keys.
@@ -143,7 +143,7 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 - [ ] **#51 — Passwords >72 bytes → unhandled 500 (bcrypt 5.0 raises, no length cap)** (`auth/models.py:65-74`) — schema max-length or pre-hash; catch ValueError.
 - [ ] **#52 — Rate limits bypassable via spoofed leftmost X-Forwarded-For (compose exposes :8000)** (`api/ratelimit.py:33-38`) — trust configured proxy hops only; don't publish 8000; nginx overwrite XFF.
 - [ ] **#53 — Fail-open defaults: known JWT key + credentialed any-origin CORS unless PULSE_ENV=production; compose never sets it** (`main.py:27-66`) — refuse default secrets in all envs; set PULSE_ENV/secret in compose.
-- [ ] **#54 — Variant is_control flag silently discarded; control inferred as position 0** (`api/v1/experiments.py:176-185`) — persist and read back the flag.
+- [x] **#54 — Variant is_control flag silently discarded; control inferred as position 0** (`api/v1/experiments.py:176-185`) — persist and read back the flag.
 - [ ] **#55 — Updating a draft experiment nulls variant attribution of existing events (silent data loss)** (`api/v1/experiments.py:170-174`) — preserve variant ids or reject updates once events exist.
 - [ ] **#56 — No role gating: viewers can approve/delete content, run bulk jobs, register webhooks** (`api/v1/content.py:184-197`) — apply the unused `require_role` dependency per operation.
 - [ ] **#57 — POST /content/{id}/versions edits APPROVED content, bypassing the editorial guard** (`api/v1/content.py:298-319`) — same DRAFT/REJECTED guard as update(), or snapshot-only semantics.

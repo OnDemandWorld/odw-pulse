@@ -179,7 +179,11 @@ async def update_experiment(
             experiment_id=experiment.id,
             name=variant_data.name,
             weight=variant_data.weight,
-            configuration=variant_data.configuration,
+            # Persist is_control (audit finding #54), same as create path.
+            configuration={
+                **(variant_data.configuration or {}),
+                "is_control": variant_data.is_control,
+            },
             position=position,
         )
         db.add(variant)

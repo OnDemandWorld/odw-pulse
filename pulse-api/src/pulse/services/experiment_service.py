@@ -83,7 +83,12 @@ class ExperimentService:
                 experiment_id=experiment.id,
                 name=variant_data.name,
                 weight=variant_data.weight,
-                configuration=variant_data.configuration,
+                # Persist is_control (audit finding #54): results infer the
+                # control from configuration, so the API flag must land there.
+                configuration={
+                    **(variant_data.configuration or {}),
+                    "is_control": variant_data.is_control,
+                },
                 position=position,
             )
             db.add(variant)
@@ -415,13 +420,24 @@ class ExperimentService:
         )
         variants = list(variant_result.scalars().all())
 
-        # Load events
+        # Aggregate events in SQL (audit finding #29): loading every raw
+        # event into memory OOMs the API on high-volume experiments. Group
+        # by (variant, metric, visitor) and pass counts to compute_results.
         event_result = await db.execute(
-            select(PerformanceEvent).where(
-                PerformanceEvent.experiment_id == experiment_id
+            select(
+                PerformanceEvent.variant_id,
+                PerformanceEvent.metric_type,
+                PerformanceEvent.subject_id,
+                func.count().label("n"),
+            )
+            .where(PerformanceEvent.experiment_id == experiment_id)
+            .group_by(
+                PerformanceEvent.variant_id,
+                PerformanceEvent.metric_type,
+                PerformanceEvent.subject_id,
             )
         )
-        events = list(event_result.scalars().all())
+        event_rows = list(event_result)
 
         # Prepare data for compute_results
         experiment_dict = {
@@ -442,11 +458,12 @@ class ExperimentService:
 
         event_dicts = [
             {
-                "variant_id": str(e.variant_id),
-                "event_type": e.metric_type.value,
-                "visitor_hash": e.subject_id or "",
+                "variant_id": str(row.variant_id),
+                "event_type": row.metric_type.value,
+                "visitor_hash": row.subject_id or "",
+                "count": row.n,
             }
-            for e in events
+            for row in event_rows
         ]
 
         return compute_results(experiment_dict, variant_dicts, event_dicts)
@@ -494,8 +511,10 @@ class ExperimentService:
             experiment.ended_at = datetime.now(UTC)
             experiment.updated_at = datetime.now(UTC)
 
-            # Store winner info in configuration
-            config = experiment.configuration or {}
+            # Store winner info in configuration. Assign a COPY: mutating
+            # the loaded dict in place is invisible to SQLAlchemy's change
+            # detection without MutableDict (audit finding #28).
+            config = dict(experiment.configuration or {})
             winner_variant_id = str(winner_variant.id)
             config["promoted_winner_id"] = winner_variant_id
             config["promoted_winner_name"] = winner_name
