@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 
@@ -35,11 +36,11 @@ def generate_tracking_url(
     # Parse existing URL
     parsed = urlparse(base_url)
 
-    # Parse existing query parameters
-    existing_params = parse_qs(parsed.query)
-
-    # Flatten existing params (parse_qs returns lists)
-    flat_params = {k: v[0] for k, v in existing_params.items()}
+    # Parse existing query parameters, preserving repeated and blank
+    # values (audit finding #86 — v[0]/keep_blank_values=False silently
+    # dropped campaign/attribution params).
+    existing_params = parse_qs(parsed.query, keep_blank_values=True)
+    flat_params: dict[str, Any] = dict(existing_params)
 
     # Add UTM parameters
     flat_params["utm_source"] = utm_source
@@ -55,8 +56,8 @@ def generate_tracking_url(
     if additional_params:
         flat_params.update(additional_params)
 
-    # Reconstruct URL
-    new_query = urlencode(flat_params)
+    # Reconstruct URL (doseq keeps multi-valued params intact)
+    new_query = urlencode(flat_params, doseq=True)
     new_parsed = parsed._replace(query=new_query)
 
     return urlunparse(new_parsed)

@@ -40,12 +40,20 @@ class LLMProvider(ABC):
     """
 
     @abstractmethod
-    async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> LLMResponse:
+    async def generate(
+        self,
+        prompt: str,
+        params: dict[str, Any] | None = None,
+        *,
+        system: str | None = None,
+    ) -> LLMResponse:
         """Generate text from a prompt.
 
         Args:
-            prompt: The input prompt to send to the LLM
+            prompt: The user prompt to send to the LLM
             params: Optional generation parameters (temperature, max_tokens, etc.)
+            system: Optional system instruction, sent with system-role
+                authority where the provider supports it (audit finding #14)
 
         Returns:
             LLMResponse containing the generated text and metadata

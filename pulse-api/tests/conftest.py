@@ -202,35 +202,18 @@ async def authorized_client(
 
 @pytest_asyncio.fixture
 async def app_fixture(async_session: AsyncSession) -> Any:
-    """Yield a FastAPI app with the DB dependency overridden for tests."""
-    from fastapi import FastAPI
-    from fastapi.middleware.cors import CORSMiddleware
+    """Yield the REAL app from create_app() with DB dependencies overridden.
 
-    from pulse.api import health
-    from pulse.api.v1 import auth as auth_v1
+    Audit finding #81: the previous hand-built FastAPI() diverged from
+    production wiring, so middleware/router/guard regressions passed CI.
+    """
     from pulse.api.v1 import bulk_jobs as bulk_jobs_v1
     from pulse.api.v1 import content as content_v1
     from pulse.api.v1 import experiments as experiments_v1
-    from pulse.api.v1 import generate as generate_v1
     from pulse.api.v1 import integrations as integrations_v1
-    from pulse.middleware.tenant import TenantMiddleware
+    from pulse.main import create_app
 
-    app = FastAPI()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.add_middleware(TenantMiddleware)
-    app.include_router(health.router, prefix="/api/v1")
-    app.include_router(auth_v1.router, prefix="/api/v1")
-    app.include_router(generate_v1.router, prefix="/api/v1")
-    app.include_router(content_v1.router, prefix="/api/v1")
-    app.include_router(bulk_jobs_v1.router, prefix="/api/v1")
-    app.include_router(integrations_v1.router, prefix="/api/v1")
-    app.include_router(experiments_v1.router, prefix="/api/v1")
+    app = create_app()
 
     # Override the DB dependency so endpoints use the in-memory session.
     # We override the *source* functions in pulse.db.session so all imports

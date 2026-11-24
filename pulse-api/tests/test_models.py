@@ -235,6 +235,7 @@ async def test_content_version_relationship(session: AsyncSession) -> None:
     v1 = ContentVersion(
         id=uuid.uuid4(),
         content_piece_id=piece_id,
+        workspace_id=ws_id,
         version_number=1,
         body="Draft body",
         status=ContentStatus.DRAFT,
@@ -304,3 +305,137 @@ async def test_experiment_and_variant(session: AsyncSession) -> None:
     assert len(variants) == 2
     assert variants[0].name == "control"
     assert variants[1].name == "treatment"
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #3 — partition keys must be part of PKs / child FKs
+# ---------------------------------------------------------------------------
+
+
+def test_partitioned_tables_include_partition_key_in_pk() -> None:
+    """PostgreSQL requires the partition key in every PK on partitioned tables."""
+    from pulse.models.audit_log import AuditLog
+    from pulse.models.content import ContentPiece, ContentVersion, ReviewAnnotation
+    from pulse.models.performance_event import (
+        ExperimentAssignment,
+        ExperimentExposure,
+        PerformanceEvent,
+    )
+
+    expectations = [
+        (ContentPiece, "workspace_id"),
+        (AuditLog, "created_at"),
+        (ExperimentAssignment, "assigned_at"),
+        (ExperimentExposure, "exposed_at"),
+        (PerformanceEvent, "received_at"),
+    ]
+    for model, partition_col in expectations:
+        pk_cols = {c.name for c in model.__table__.primary_key.columns}
+        assert partition_col in pk_cols, (
+            f"{model.__tablename__} PK {pk_cols} missing partition key {partition_col}"
+        )
+
+    # Children referencing the HASH-partitioned content_pieces must use
+    # composite FKs (id, workspace_id).
+    for child in (ContentVersion, ReviewAnnotation, PerformanceEvent):
+        fks = [
+            fk
+            for fk in child.__table__.foreign_keys
+            if fk.column.table.name == "content_pieces"
+        ]
+        assert fks, f"{child.__tablename__} has no FK to content_pieces"
+        for fk in fks:
+            assert fk.parent.name in ("content_piece_id", "workspace_id")
+            constrained = {c.name for c in fk.constraint.columns}
+            assert constrained == {"content_piece_id", "workspace_id"}, (
+                f"{child.__tablename__} FK must be composite, got {constrained}"
+            )
+
+
+def test_migration_enum_and_jsonb_match_models() -> None:
+    """Drift guard (audit #21/#22): migration 001 must include 'paused' and use JSONB."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src/pulse/db/migrations/versions/001_initial_schema.py"
+    text = src.read_text()
+    enum_block = text.split("bulk_job_status = sa.Enum(")[1].split(")")[0]
+    assert '"paused"' in enum_block
+    assert "sa.JSON" not in text, "migration must use postgresql.JSONB to match ORM models"
+
+
+def test_admin_factory_requires_distinct_url_when_rls_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit #25: fail fast instead of silently breaking auth after RLS rollout."""
+    import pulse.db.session as session_mod
+    from pulse.config import Settings
+
+    monkeypatch.setattr(session_mod, "_admin_session_factory", None)
+    monkeypatch.setattr(session_mod, "_admin_engine", None)
+    settings = Settings(
+        rls_enforced=True,
+        database_admin_url=None,
+        database_url="postgresql+asyncpg://pulse:pulse@localhost/pulse",
+    )
+    with pytest.raises(RuntimeError, match="BYPASSRLS"):
+        session_mod.get_admin_session_factory(settings)
+
+
+def test_migration_rls_and_default_partitions_cover_telemetry() -> None:
+    """Drift guard (audit #23/#24)."""
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[1] / "src/pulse/db/migrations/versions"
+    text001 = (versions / "001_initial_schema.py").read_text()
+    rls_list = text001.split("workspace_scoped_tables = [")[1].split("]")[0]
+    assert '"performance_events"' in rls_list
+    assert "_default PARTITION OF" in text001
+    text002 = (versions / "002_user_auth.py").read_text()
+    assert '"performance_events"' in text002
+
+
+def test_user_and_workspace_constraints_match_migrations() -> None:
+    """Drift guard (audit #61/#62)."""
+    from pulse.models.user import User
+    from pulse.models.workspace import Workspace
+
+    user_uniques = {
+        c.name: [col.name for col in c.columns]
+        for c in User.__table__.constraints
+        if isinstance(c, sa.UniqueConstraint)
+    }
+    assert user_uniques.get("uq_users_email") == ["email"]
+    assert "uq_users_workspace_email" not in user_uniques
+
+    slug_col = Workspace.__table__.c.slug
+    assert slug_col.unique is not True
+    slug_uniques = [
+        c for c in Workspace.__table__.constraints
+        if isinstance(c, sa.UniqueConstraint) and "slug" in [col.name for col in c.columns]
+    ]
+    assert len(slug_uniques) == 1
+    assert slug_uniques[0].name == "uq_workspaces_slug"
+
+
+def test_alembic_env_escapes_percent_in_url() -> None:
+    """Drift guard (audit #65): ConfigParser interpolation requires %%."""
+    from pathlib import Path
+
+    env_py = Path(__file__).resolve().parents[1] / "src/pulse/db/migrations/env.py"
+    assert '.replace("%", "%%")' in env_py.read_text()
+
+
+def test_stdlib_logging_rendered_as_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """Audit #89: stdlib log records must be JSON like structlog records."""
+    import json
+    import logging
+
+    from pulse.core.logging import configure_logging
+
+    configure_logging("info")
+    logging.getLogger("audit89.probe").warning("hello structured world")
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out, "no log output captured"
+    record = json.loads(out[-1])
+    assert record["event"] == "hello structured world"
+    assert record["level"] == "warning"

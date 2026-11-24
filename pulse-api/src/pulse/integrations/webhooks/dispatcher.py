@@ -14,7 +14,39 @@ import json
 import time
 from typing import Any
 
+import httpcore
 import httpx
+from httpcore._backends.anyio import AnyIOBackend
+
+
+class _PinnedBackend(AnyIOBackend):
+    """Connect to a pre-validated IP regardless of the URL hostname.
+
+    Closes the DNS-rebinding window between SSRF validation and the actual
+    connection (audit finding #45). TLS SNI and certificate verification
+    still use the URL hostname because httpcore performs the handshake
+    above the network backend. (AnyIOBackend is httpcore's stable anyio
+    backend; httpcore is a hard dependency of httpx.)
+    """
+
+    def __init__(self, ip: str) -> None:
+        self._ip = ip
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        return await super().connect_tcp(
+            self._ip,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
 
 
 class WebhookDispatcher:
@@ -112,6 +144,30 @@ class WebhookDispatcher:
             "X-Pulse-Timestamp": str(body["timestamp"]),
         }
 
-        response = await self._http.post(url, content=raw, headers=headers)
+        if self._owns_client:
+            # Production path: validate and PIN the resolved IP for the
+            # connection (audit finding #45) — a second DNS answer at
+            # connect time can no longer redirect us to an internal host.
+            from pulse.integrations.webhooks.url_guard import validate_webhook_url
+
+            ips = await validate_webhook_url(url)
+            timeout_ext = {"timeout": {"connect": self._timeout, "read": self._timeout,
+                                       "write": self._timeout, "pool": self._timeout}}
+            async with httpcore.AsyncConnectionPool(
+                network_backend=_PinnedBackend(ips[0])
+            ) as pool:
+                resp = await pool.request(
+                    "POST",
+                    url,
+                    headers=list(headers.items()),
+                    content=raw,
+                    extensions=timeout_ext,
+                )
+            response = httpx.Response(
+                resp.status, headers=list(resp.headers), content=resp.content
+            )
+        else:
+            # Injected client (tests / custom transports).
+            response = await self._http.post(url, content=raw, headers=headers)
         response.raise_for_status()
         return response

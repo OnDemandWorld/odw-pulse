@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.schemas.experiment import ExperimentCreate
@@ -82,7 +83,12 @@ class ExperimentService:
                 experiment_id=experiment.id,
                 name=variant_data.name,
                 weight=variant_data.weight,
-                configuration=variant_data.configuration,
+                # Persist is_control (audit finding #54): results infer the
+                # control from configuration, so the API flag must land there.
+                configuration={
+                    **(variant_data.configuration or {}),
+                    "is_control": variant_data.is_control,
+                },
                 position=position,
             )
             db.add(variant)
@@ -142,14 +148,19 @@ class ExperimentService:
         result = await db.execute(query)
         items = list(result.scalars().all())
 
-        # Load variants for each experiment
-        for item in items:
+        # Load variants for the whole page in ONE query (audit finding #63
+        # — previously one SELECT per experiment, 102 queries at limit=100).
+        if items:
             variants_result = await db.execute(
                 select(ExperimentVariant)
-                .where(ExperimentVariant.experiment_id == item.id)
+                .where(ExperimentVariant.experiment_id.in_([i.id for i in items]))
                 .order_by(ExperimentVariant.position)
             )
-            item.variants = list(variants_result.scalars().all())
+            by_experiment: dict[uuid.UUID, list[ExperimentVariant]] = {}
+            for variant in variants_result.scalars():
+                by_experiment.setdefault(variant.experiment_id, []).append(variant)
+            for item in items:
+                item.variants = by_experiment.get(item.id, [])
 
         return items, total
 
@@ -263,9 +274,49 @@ class ExperimentService:
     # Event ingestion
     # ------------------------------------------------------------------
 
+    async def _validate_event_target(
+        self,
+        db: AsyncSession,
+        workspace_id: uuid.UUID,
+        experiment_id: uuid.UUID,
+        variant_id: uuid.UUID,
+    ) -> None:
+        """Verify experiment ownership and variant consistency (audit #12).
+
+        Without this check any authenticated user could write telemetry into
+        another workspace's experiment (cross-workspace write IDOR).
+        """
+        experiment = (
+            await db.execute(
+                select(Experiment.id).where(
+                    Experiment.id == experiment_id,
+                    Experiment.workspace_id == workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if experiment is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Experiment not found",
+            )
+        variant = (
+            await db.execute(
+                select(ExperimentVariant.id).where(
+                    ExperimentVariant.id == variant_id,
+                    ExperimentVariant.experiment_id == experiment_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if variant is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Variant does not belong to the experiment",
+            )
+
     async def ingest_event(
         self,
         db: AsyncSession,
+        workspace_id: uuid.UUID,
         experiment_id: uuid.UUID,
         variant_id: uuid.UUID,
         event_type: str,
@@ -282,8 +333,11 @@ class ExperimentService:
                 detail=f"Invalid event type: {event_type}",
             ) from err
 
+        await self._validate_event_target(db, workspace_id, experiment_id, variant_id)
+
         event = PerformanceEvent(
             id=uuid.uuid4(),
+            workspace_id=workspace_id,
             experiment_id=experiment_id,
             variant_id=variant_id,
             subject_id=visitor_hash,
@@ -293,27 +347,44 @@ class ExperimentService:
             received_at=datetime.now(UTC),
         )
         db.add(event)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Event references unknown experiment or variant",
+            ) from err
         await db.refresh(event)
         return event
 
     async def ingest_events_batch(
         self,
         db: AsyncSession,
+        workspace_id: uuid.UUID,
         events: list[dict[str, Any]],
     ) -> int:
         """Ingest a batch of performance events. Returns count inserted."""
         count = 0
+        validated: set[tuple[uuid.UUID, uuid.UUID]] = set()
         for event_data in events:
             try:
                 metric_type = PerformanceMetricType(event_data["event_type"])
             except (ValueError, KeyError):
                 continue
 
+            experiment_id = event_data["experiment_id"]
+            variant_id = event_data["variant_id"]
+            pair = (experiment_id, variant_id)
+            if pair not in validated:
+                await self._validate_event_target(db, workspace_id, experiment_id, variant_id)
+                validated.add(pair)
+
             event = PerformanceEvent(
                 id=uuid.uuid4(),
-                experiment_id=event_data["experiment_id"],
-                variant_id=event_data["variant_id"],
+                workspace_id=workspace_id,
+                experiment_id=experiment_id,
+                variant_id=variant_id,
                 subject_id=event_data.get("visitor_hash"),
                 metric_type=metric_type,
                 value=event_data.get("value", 1.0),
@@ -323,7 +394,14 @@ class ExperimentService:
             db.add(event)
             count += 1
 
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Batch references unknown experiment or variant",
+            ) from err
         return count
 
     # ------------------------------------------------------------------
@@ -347,13 +425,24 @@ class ExperimentService:
         )
         variants = list(variant_result.scalars().all())
 
-        # Load events
+        # Aggregate events in SQL (audit finding #29): loading every raw
+        # event into memory OOMs the API on high-volume experiments. Group
+        # by (variant, metric, visitor) and pass counts to compute_results.
         event_result = await db.execute(
-            select(PerformanceEvent).where(
-                PerformanceEvent.experiment_id == experiment_id
+            select(
+                PerformanceEvent.variant_id,
+                PerformanceEvent.metric_type,
+                PerformanceEvent.subject_id,
+                func.count().label("n"),
+            )
+            .where(PerformanceEvent.experiment_id == experiment_id)
+            .group_by(
+                PerformanceEvent.variant_id,
+                PerformanceEvent.metric_type,
+                PerformanceEvent.subject_id,
             )
         )
-        events = list(event_result.scalars().all())
+        event_rows = list(event_result)
 
         # Prepare data for compute_results
         experiment_dict = {
@@ -374,11 +463,12 @@ class ExperimentService:
 
         event_dicts = [
             {
-                "variant_id": str(e.variant_id),
-                "event_type": e.metric_type.value,
-                "visitor_hash": e.subject_id or "",
+                "variant_id": str(row.variant_id),
+                "event_type": row.metric_type.value,
+                "visitor_hash": row.subject_id or "",
+                "count": row.n,
             }
-            for e in events
+            for row in event_rows
         ]
 
         return compute_results(experiment_dict, variant_dicts, event_dicts)
@@ -426,8 +516,10 @@ class ExperimentService:
             experiment.ended_at = datetime.now(UTC)
             experiment.updated_at = datetime.now(UTC)
 
-            # Store winner info in configuration
-            config = experiment.configuration or {}
+            # Store winner info in configuration. Assign a COPY: mutating
+            # the loaded dict in place is invisible to SQLAlchemy's change
+            # detection without MutableDict (audit finding #28).
+            config = dict(experiment.configuration or {})
             winner_variant_id = str(winner_variant.id)
             config["promoted_winner_id"] = winner_variant_id
             config["promoted_winner_name"] = winner_name

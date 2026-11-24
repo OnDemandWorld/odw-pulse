@@ -28,7 +28,9 @@ class Workspace(Base):
         server_default=func.gen_random_uuid(),
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    # Uniqueness via the named uq_workspaces_slug constraint only (audit
+    # finding #62 — unique=True created a phantom duplicate constraint).
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
     settings: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

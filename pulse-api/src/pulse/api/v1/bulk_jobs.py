@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse.api.deps import CurrentUser, get_db
+from pulse.api.deps import CurrentUser, get_db, require_role
 from pulse.api.schemas.bulk_job import BulkJobConfig, BulkJobList, BulkJobRead
 from pulse.services.bulk_job_service import BulkJobService
 from pulse.worker.dispatch import enqueue_job
@@ -38,6 +38,9 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 # Shared storage directories (must match worker.tasks).
 _UPLOAD_DIR = Path(tempfile.gettempdir()) / "pulse_bulk_uploads"
+
+# Strong references to in-process fallback tasks (audit finding #98).
+_background_tasks: set[asyncio.Task[None]] = set()
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -46,7 +49,7 @@ _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 
 
-@router.post("", response_model=BulkJobRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=BulkJobRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def create_bulk_job(
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
@@ -79,14 +82,32 @@ async def create_bulk_job(
 
     # Persist uploaded file (random prefix neutralises the client-supplied
     # filename; only the .csv extension was validated above).
-    content_bytes = await file.read()
-    if len(content_bytes) > MAX_UPLOAD_BYTES:
+    # Read in bounded chunks (audit finding #58): a single file.read()
+    # materialises the whole body in memory before the size check.
+    chunks: list[bytes] = []
+    total_read = 0
+    while chunk := await file.read(64 * 1024):
+        total_read += len(chunk)
+        if total_read > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"CSV upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit",
+            )
+        chunks.append(chunk)
+    content_bytes = b"".join(chunks)
+    # Sanitize the client filename (audit finding #99): separators/control
+    # characters produced invalid paths and unhandled 500s.
+    safe_name = Path(file.filename or "upload.csv").name
+    safe_name = "".join(ch for ch in safe_name if ch.isprintable()) or "upload.csv"
+    file_path = _UPLOAD_DIR / f"{uuid.uuid4()}_{safe_name}"
+    try:
+        # Off-loop write (audit finding #97).
+        await asyncio.to_thread(file_path.write_bytes, content_bytes)
+    except OSError as err:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"CSV upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit",
-        )
-    file_path = _UPLOAD_DIR / f"{uuid.uuid4()}_{file.filename}"
-    file_path.write_bytes(content_bytes)
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not store uploaded file",
+        ) from err
 
     config = BulkJobConfig(
         prompt_column=prompt_column,
@@ -107,10 +128,14 @@ async def create_bulk_job(
     # Dispatch to the worker stream.  When Redis is unreachable (minimal dev
     # setups) fall back to processing inside this process.
     if not await enqueue_job(str(job.id)):
-        asyncio.create_task(
+        # Keep a strong reference (audit finding #98): asyncio only holds
+        # weak refs, so an unreferenced task can be GC'd mid-job.
+        task = asyncio.create_task(
             _run_in_process(str(job.id)),
             name=f"bulk-job-{job.id}",
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     return BulkJobRead.model_validate(job, from_attributes=True)
 
@@ -173,7 +198,7 @@ async def get_bulk_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{job_id}/pause", response_model=BulkJobRead)
+@router.post("/{job_id}/pause", response_model=BulkJobRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def pause_bulk_job(
     job_id: uuid.UUID,
     current_user: CurrentUser,
@@ -191,7 +216,7 @@ async def pause_bulk_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{job_id}/resume", response_model=BulkJobRead)
+@router.post("/{job_id}/resume", response_model=BulkJobRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def resume_bulk_job(
     job_id: uuid.UUID,
     current_user: CurrentUser,
@@ -209,7 +234,7 @@ async def resume_bulk_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{job_id}/cancel", response_model=BulkJobRead)
+@router.post("/{job_id}/cancel", response_model=BulkJobRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def cancel_bulk_job(
     job_id: uuid.UUID,
     current_user: CurrentUser,
@@ -237,7 +262,11 @@ async def download_bulk_job_results(
     job: Any = await _bulk_job_service.get_job(
         db=db, job_id=job_id, workspace_id=current_user.workspace_id,
     )
-    if not job.output_file or not Path(job.output_file).exists():
+    # Off-loop stat (audit finding #97).
+    output_exists = job.output_file and await asyncio.to_thread(
+        Path(job.output_file).exists
+    )
+    if not output_exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Output file not found",

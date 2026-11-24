@@ -14,8 +14,11 @@ def assign_variant(
 ) -> str:
     """Assign a visitor to a variant deterministically.
 
-    Uses SHA256(visitor_id + experiment_id) % 100 to get a bucket (0-99),
-    then maps that bucket to a variant based on cumulative weights.
+    Uses SHA256(visitor_id + experiment_id) % 10000 to get a bucket
+    (0-9999, basis-point granularity per the TSD), then maps that bucket
+    to a variant via integer cumulative weights (audit finding #82 —
+    float boundaries caused off-by-one allocation and %100 could not
+    represent sub-1% weights).
 
     Args:
         visitor_id: Opaque visitor identifier (user ID, session ID, etc.)
@@ -37,25 +40,27 @@ def assign_variant(
     hash_input = f"{visitor_id}{experiment_id}"
     hash_bytes = hashlib.sha256(hash_input.encode("utf-8")).digest()
     hash_int = int.from_bytes(hash_bytes[:4], byteorder="big")
-    bucket = hash_int % 100
+    bucket = hash_int % 10000
 
-    # Normalize weights
+    return _assign_bucket(bucket, weights)
+
+
+def _assign_bucket(bucket: int, weights: dict[str, float]) -> str:
+    """Map a basis-point bucket (0-9999) to a variant using integer math."""
     total_weight = sum(weights.values())
     if total_weight <= 0:
         raise ValueError("Total weight must be positive")
 
     normalized = {k: v / total_weight for k, v in weights.items()}
-
-    # Map bucket to variant via cumulative distribution
-    cumulative = 0.0
     sorted_variants = sorted(normalized.items(), key=lambda x: x[0])  # Sort for determinism
 
-    for variant_name, weight in sorted_variants:
-        cumulative += weight
-        if bucket < cumulative * 100:
+    # Integer basis points; the last variant takes the remainder so the
+    # buckets always partition exactly (no float boundary drift).
+    cumulative = 0
+    for variant_name, weight in sorted_variants[:-1]:
+        cumulative += round(weight * 10000)
+        if bucket < cumulative:
             return variant_name
-
-    # Fallback (should never reach here due to normalization)
     return sorted_variants[-1][0]
 
 

@@ -13,6 +13,33 @@ spec:
       labels:
         app: pulse-worker
     spec:
+      # Shared bulk-job payloads with pulse-api (audit finding #7).
+      volumes:
+        - name: bulk-uploads
+          persistentVolumeClaim:
+            claimName: pulse-bulk-uploads
+        - name: bulk-outputs
+          persistentVolumeClaim:
+            claimName: pulse-bulk-outputs
+      # Run schema migrations before consuming (audit finding #6). The
+      # worker image keeps pulse-api (incl. alembic.ini) under /app/pulse-api.
+      initContainers:
+        - name: migrate
+          image: ondemandworld/pulse-worker:latest
+          command: ["sh", "-c", "cd /app/pulse-api && alembic upgrade head"]
+          envFrom:
+            - configMapRef:
+                name: pulse-config
+            - secretRef:
+                name: pulse-secrets
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
       containers:
         - name: pulse-worker
           image: ondemandworld/pulse-worker:latest
@@ -22,10 +49,45 @@ spec:
             - secretRef:
                 name: pulse-secrets
           env:
+            # $(VAR) expansion only resolves vars defined earlier in this env
+            # list — NOT envFrom vars (audit finding #5).
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: POSTGRES_PASSWORD
             - name: DATABASE_URL
               value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: REDIS_PASSWORD
             - name: REDIS_URL
-              value: "redis://redis:6379/0"
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+          volumeMounts:
+            - name: bulk-uploads
+              mountPath: /tmp/pulse_bulk_uploads
+            - name: bulk-outputs
+              mountPath: /tmp/pulse_bulk_outputs
+          # Heartbeat-file probes (audit finding #73): the consume loop
+          # touches the file every cycle; a wedged loop stops touching it.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/pulse-worker-heartbeat')<180 else 1)"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/pulse-worker-heartbeat')<180 else 1)"
+            initialDelaySeconds: 10
+            periodSeconds: 15
           resources:
             requests:
               cpu: 100m

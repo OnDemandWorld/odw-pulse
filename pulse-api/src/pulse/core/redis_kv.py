@@ -20,6 +20,7 @@ every request.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -34,6 +35,33 @@ REPROBE_SECONDS = 30.0
 # Minimum gap between local-expired-key sweeps.
 _PRUNE_INTERVAL_SECONDS = 60.0
 
+# Atomic fixed-window counter (audit finding #47). INCR and EXPIRE must not
+# be separate round-trips: a failure between them would leave an immortal
+# key that permanently rate-limits the client. Also repairs TTL=-1 keys.
+_INCR_WINDOW_LUA = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local remaining = redis.call('TTL', KEYS[1])
+if remaining < 0 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+    remaining = tonumber(ARGV[1])
+end
+return {count, remaining}
+"""
+
+
+def redact_url(url: str) -> str:
+    """Strip credentials from a connection URL before logging (audit #48)."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return f"{parts.scheme}://{host}{parts.path}"
+
 
 class RedisKV:
     """TTL key/value store backed by Redis with an in-process fallback."""
@@ -43,6 +71,9 @@ class RedisKV:
         self._redis: Any = None
         self._unavailable_until = 0.0
         self._last_prune = 0.0
+        # Serialize client creation (audit finding #101): concurrent first
+        # requests otherwise built N clients and leaked N-1 open pools.
+        self._client_lock = asyncio.Lock()
         # Local fallback tables: key -> (monotonic expiry, payload)
         self._local_counts: dict[str, tuple[float, int]] = {}
         self._local_values: dict[str, tuple[float, str]] = {}
@@ -53,22 +84,29 @@ class RedisKV:
 
     async def _client(self) -> Any | None:
         """Return a live Redis client, or *None* while unavailable."""
-        now = time.monotonic()
         if self._redis is not None:
             return self._redis
-        if now < self._unavailable_until:
+        if time.monotonic() < self._unavailable_until:
             return None
-        try:
-            import redis.asyncio as aioredis
+        async with self._client_lock:
+            # Re-check under the lock: another coroutine may have connected.
+            if self._redis is not None:
+                return self._redis
+            if time.monotonic() < self._unavailable_until:
+                return None
+            try:
+                import redis.asyncio as aioredis
 
-            client = aioredis.from_url(self._redis_url, decode_responses=True)
-            await client.ping()
-            self._redis = client
-            logger.info("KV store connected to Redis at %s", self._redis_url)
-            return client
-        except Exception as exc:  # pragma: no cover - depends on environment
-            self._mark_unavailable(exc)
-            return None
+                client = aioredis.from_url(self._redis_url, decode_responses=True)
+                await client.ping()
+                self._redis = client
+                logger.info(
+                    "KV store connected to Redis at %s", redact_url(self._redis_url)
+                )
+                return client
+            except Exception as exc:  # pragma: no cover - depends on environment
+                self._mark_unavailable(exc)
+                return None
 
     def _mark_unavailable(self, exc: BaseException) -> None:
         """Drop the client and stop re-probing for a while."""
@@ -103,12 +141,13 @@ class RedisKV:
         client = await self._client()
         if client is not None:
             try:
-                count = int(await client.incr(key))
-                if count == 1:
-                    await client.expire(key, ttl_seconds)
-                remaining = await client.ttl(key)
-                retry_after = ttl_seconds if remaining is None or int(remaining) < 0 else int(remaining)
-                return count, max(retry_after, 1)
+                # Atomic INCR+EXPIRE (audit finding #47): separate commands
+                # could leave the key without a TTL if the connection died
+                # between them, permanently 429-locking the client IP. The
+                # script also re-applies expiry defensively if TTL is -1.
+                result = await client.eval(_INCR_WINDOW_LUA, 1, key, ttl_seconds)
+                count, remaining = int(result[0]), int(result[1])
+                return count, max(remaining, 1)
             except Exception as exc:
                 self._mark_unavailable(exc)
         return self._local_incr(key, ttl_seconds)

@@ -15,6 +15,25 @@ spec:
       labels:
         app: pulse-scheduler
     spec:
+      # Run schema migrations before reaping (audit finding #6). The
+      # scheduler image keeps pulse-api (incl. alembic.ini) under /app/pulse-api.
+      initContainers:
+        - name: migrate
+          image: ondemandworld/pulse-scheduler:latest
+          command: ["sh", "-c", "cd /app/pulse-api && alembic upgrade head"]
+          envFrom:
+            - configMapRef:
+                name: pulse-config
+            - secretRef:
+                name: pulse-secrets
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
       containers:
         - name: pulse-scheduler
           image: ondemandworld/pulse-scheduler:latest
@@ -24,10 +43,32 @@ spec:
             - secretRef:
                 name: pulse-secrets
           env:
+            # $(VAR) expansion only resolves vars defined earlier in this env
+            # list — NOT envFrom vars (audit finding #5).
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: POSTGRES_PASSWORD
             - name: DATABASE_URL
               value: "postgresql+asyncpg://pulse:$(POSTGRES_PASSWORD)@postgres:5432/pulse"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: REDIS_PASSWORD
             - name: REDIS_URL
-              value: "redis://redis:6379/0"
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+          # Heartbeat-file probe (audit finding #73): tick() touches the
+          # file every 60s; a hung scheduler stops touching it.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/pulse-scheduler-heartbeat')<180 else 1)"
+            initialDelaySeconds: 90
+            periodSeconds: 30
           resources:
             requests:
               cpu: 50m

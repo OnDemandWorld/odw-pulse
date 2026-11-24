@@ -20,7 +20,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pulse.api.deps import CurrentUser, get_db
+from pulse.api.deps import CurrentUser, get_db, require_role
 from pulse.api.schemas.experiment import (
     ExperimentCreate,
     ExperimentList,
@@ -64,6 +64,7 @@ def _experiment_to_read(
     "/experiments",
     response_model=ExperimentRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_role("owner", "admin", "editor"))],
 )
 async def create_experiment(
     data: ExperimentCreate,
@@ -130,7 +131,7 @@ async def get_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.put("/experiments/{experiment_id}", response_model=ExperimentRead)
+@router.put("/experiments/{experiment_id}", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def update_experiment(
     experiment_id: uuid.UUID,
     data: ExperimentCreate,
@@ -160,29 +161,43 @@ async def update_experiment(
     experiment.hypothesis = data.hypothesis
     experiment.configuration = data.configuration
 
-    # Replace variants
+    # Update variants in place (audit finding #55): deleting and recreating
+    # every variant nulls performance_events.variant_id (ON DELETE SET NULL)
+    # and silently destroys telemetry attribution. Keep the ids of variants
+    # whose names survive; only remove variants that are actually gone.
     from datetime import UTC, datetime
 
-    from sqlalchemy import delete
+    from sqlalchemy import select as _select
 
     from pulse.models.experiment import ExperimentVariant
 
-    await db.execute(
-        delete(ExperimentVariant).where(
+    existing_result = await db.execute(
+        _select(ExperimentVariant).where(
             ExperimentVariant.experiment_id == experiment_id
         )
     )
+    existing = {v.name: v for v in existing_result.scalars()}
+    new_names = {v.name for v in data.variants}
+    for name, old_variant in existing.items():
+        if name not in new_names:
+            await db.delete(old_variant)
 
     for position, variant_data in enumerate(data.variants):
-        variant = ExperimentVariant(
-            id=uuid.uuid4(),
-            experiment_id=experiment.id,
-            name=variant_data.name,
-            weight=variant_data.weight,
-            configuration=variant_data.configuration,
-            position=position,
-        )
-        db.add(variant)
+        variant = existing.get(variant_data.name)
+        if variant is None:
+            variant = ExperimentVariant(
+                id=uuid.uuid4(),
+                experiment_id=experiment.id,
+                name=variant_data.name,
+            )
+            db.add(variant)
+        variant.weight = variant_data.weight
+        # Persist is_control (audit finding #54), same as create path.
+        variant.configuration = {
+            **(variant_data.configuration or {}),
+            "is_control": variant_data.is_control,
+        }
+        variant.position = position
 
     experiment.updated_at = datetime.now(UTC)
     await db.commit()
@@ -207,7 +222,7 @@ async def update_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/experiments/{experiment_id}/start", response_model=ExperimentRead)
+@router.post("/experiments/{experiment_id}/start", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def start_experiment(
     experiment_id: uuid.UUID,
     current_user: CurrentUser,
@@ -241,7 +256,7 @@ async def start_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/experiments/{experiment_id}/pause", response_model=ExperimentRead)
+@router.post("/experiments/{experiment_id}/pause", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def pause_experiment(
     experiment_id: uuid.UUID,
     current_user: CurrentUser,
@@ -261,7 +276,7 @@ async def pause_experiment(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/experiments/{experiment_id}/stop", response_model=ExperimentRead)
+@router.post("/experiments/{experiment_id}/stop", response_model=ExperimentRead, dependencies=[Depends(require_role("owner", "admin", "editor"))])
 async def stop_experiment(
     experiment_id: uuid.UUID,
     current_user: CurrentUser,
@@ -340,6 +355,7 @@ async def get_experiment_results(
 @router.post(
     "/experiments/{experiment_id}/promote-winner",
     response_model=PromoteWinnerResponse,
+    dependencies=[Depends(require_role("owner", "admin", "editor"))],
 )
 async def promote_winner(
     experiment_id: uuid.UUID,
@@ -372,6 +388,7 @@ async def ingest_performance_event(
     """Ingest a single performance event for an experiment variant."""
     event = await _experiment_service.ingest_event(
         db=db,
+        workspace_id=current_user.workspace_id,
         experiment_id=data.experiment_id,
         variant_id=data.variant_id,
         event_type=data.event_type,
@@ -408,5 +425,7 @@ async def ingest_performance_events_batch(
         }
         for e in data.events
     ]
-    count = await _experiment_service.ingest_events_batch(db=db, events=events_data)
+    count = await _experiment_service.ingest_events_batch(
+        db=db, workspace_id=current_user.workspace_id, events=events_data
+    )
     return {"ingested": count}

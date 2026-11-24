@@ -1,5 +1,5 @@
 import { Outlet, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '@/api/client';
 import NavLink from './NavLink';
 import { UserProfile } from '@/types';
@@ -10,6 +10,7 @@ function fetchMe() {
 
 export default function Layout() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: me } = useQuery({
     queryKey: ['me'],
     queryFn: fetchMe,
@@ -24,6 +25,10 @@ export default function Layout() {
       // or is unreachable.
     } finally {
       localStorage.removeItem('pulse_token');
+      // Audit finding #30: query keys are workspace-agnostic; without
+      // clearing, the next user in this tab sees the previous workspace's
+      // cached data until refetch resolves.
+      queryClient.clear();
       navigate('/login', { replace: true });
     }
   };

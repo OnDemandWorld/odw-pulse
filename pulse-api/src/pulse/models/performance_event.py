@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, Text, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, ForeignKeyConstraint, Index, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -79,8 +79,10 @@ class ExperimentAssignment(Base):
         nullable=False,
         comment="Opaque subject identifier (user id, session id, …).",
     )
+    # Part of the composite PK (RANGE partition key — audit finding #3).
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        primary_key=True,
         nullable=False,
         server_default=func.now(),
     )
@@ -130,8 +132,10 @@ class ExperimentExposure(Base):
         default=ExposureChannel.WEB,
         server_default=ExposureChannel.WEB.value,
     )
+    # Part of the composite PK (RANGE partition key — audit finding #3).
     exposed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        primary_key=True,
         nullable=False,
         server_default=func.now(),
     )
@@ -166,9 +170,9 @@ class PerformanceEvent(Base):
     )
     content_piece_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("content_pieces.id", ondelete="SET NULL"),
         nullable=True,
     )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     experiment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("experiments.id", ondelete="SET NULL"),
@@ -194,13 +198,21 @@ class PerformanceEvent(Base):
     metadata_: Mapped[dict[str, Any] | None] = mapped_column(
         "metadata", JSONB, nullable=True, default=dict
     )
+    # Part of the composite PK (RANGE partition key — audit finding #3).
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        primary_key=True,
         nullable=False,
         server_default=func.now(),
     )
 
     __table_args__ = (
+        # Composite FK: the partitioned parent's PK is (id, workspace_id).
+        ForeignKeyConstraint(
+            ["content_piece_id", "workspace_id"],
+            ["content_pieces.id", "content_pieces.workspace_id"],
+            ondelete="SET NULL",
+        ),
         Index("ix_performance_events_content_piece", "content_piece_id"),
         Index("ix_performance_events_experiment", "experiment_id"),
         Index("ix_performance_events_received_at", "received_at"),

@@ -180,7 +180,9 @@ class PerformanceEventBatchCreate(BaseModel):
     """Schema for ingesting a batch of performance events."""
 
     events: list[PerformanceEventCreate] = Field(
-        ..., description="Batch of events to ingest"
+        ...,
+        max_length=1000,
+        description="Batch of events to ingest (max 1000 per request — audit #29)",
     )
 
 

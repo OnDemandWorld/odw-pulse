@@ -9,10 +9,12 @@ import {
   ListResponse,
 } from '@/types';
 
-function fetchExperiments() {
+const PAGE_SIZE = 20;
+
+function fetchExperiments(offset: number) {
   return apiClient
-    .get<ListResponse<Experiment>>('/experiments')
-    .then((res) => res.data.items);
+    .get<ListResponse<Experiment>>('/experiments', { params: { limit: PAGE_SIZE, offset } })
+    .then((res) => res.data);
 }
 
 function fetchResults(experimentId: string) {
@@ -33,7 +35,12 @@ interface VariantDraft {
 }
 
 function newVariantDraft(name: string, weight: number): VariantDraft {
-  return { key: crypto.randomUUID(), name, weight, content: '' };
+  // crypto.randomUUID only exists in secure contexts; the shipped
+  // compose/k8s topologies serve plain HTTP (audit finding #34).
+  const key =
+    crypto.randomUUID?.() ??
+    `v-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return { key, name, weight, content: '' };
 }
 
 const STATUS_COLORS: Record<ExperimentStatus, string> = {
@@ -225,10 +232,13 @@ export default function Experiments() {
   ]);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: experiments, isLoading, error: queryError } = useQuery({
-    queryKey: ['experiments'],
-    queryFn: fetchExperiments,
+  const [offset, setOffset] = useState(0);
+  const { data: experimentsPage, isLoading, error: queryError } = useQuery({
+    queryKey: ['experiments', offset],
+    queryFn: () => fetchExperiments(offset),
   });
+  const experiments = experimentsPage?.items;
+  const total = experimentsPage?.total ?? 0;
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -407,7 +417,7 @@ export default function Experiments() {
           </div>
         )}
 
-        {experiments && experiments.length === 0 && (
+        {total === 0 && (
           <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-500">
             No experiments yet. Create one to get started.
           </div>
@@ -415,6 +425,29 @@ export default function Experiments() {
 
         {experiments?.map((exp) => <ExperimentCard key={exp.id} experiment={exp} />)}
       </div>
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
+          <span>
+            Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="space-x-2">
+            <button
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              disabled={offset + PAGE_SIZE >= total}
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

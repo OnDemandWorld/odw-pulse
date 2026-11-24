@@ -7,9 +7,12 @@ import json
 from typing import Any
 
 import httpx
+import structlog
 
 from pulse.config import get_settings
 from pulse.integrations.analytics.base import AnalyticsConnector
+
+logger = structlog.get_logger()
 
 
 class MixpanelConnector(AnalyticsConnector):
@@ -37,18 +40,20 @@ class MixpanelConnector(AnalyticsConnector):
 
     def normalize(self, event: dict[str, Any]) -> dict[str, Any]:
         """Map a Pulse event to the Mixpanel track payload."""
-        properties: dict[str, Any] = {
-            "token": self._project_token,
-            "source": "pulse",
-        }
-        properties.update(event.get("properties", {}))
-
+        # Audit finding #83: apply event properties FIRST, then force the
+        # reserved keys — a caller-supplied 'token' property must not be
+        # able to redirect events into another project.
+        properties: dict[str, Any] = dict(event.get("properties", {}))
+        properties.update(
+            {
+                "token": self._project_token,
+                "source": "pulse",
+                "distinct_id": str(event.get("user_id", "anonymous")),
+            }
+        )
         return {
             "event": event.get("event_name", "pulse_event"),
-            "properties": {
-                **properties,
-                "distinct_id": str(event.get("user_id", "anonymous")),
-            },
+            "properties": properties,
         }
 
     async def send(self, event: dict[str, Any]) -> None:
@@ -59,10 +64,15 @@ class MixpanelConnector(AnalyticsConnector):
         # (base64-encoded) or as a raw JSON body with the correct
         # content-type.  We use the JSON body approach.
         data_param = base64.b64encode(json.dumps(payload).encode()).decode()
-        await self._http.post(
+        response = await self._http.post(
             self.TRACK_URL,
             params={"data": data_param},
         )
+        if response.status_code >= 400:
+            # Audit finding #84: failed deliveries must be visible.
+            logger.warning(
+                "mixpanel delivery failed", status_code=response.status_code
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle

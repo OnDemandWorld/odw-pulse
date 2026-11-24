@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pulse.api.schemas.experiment import ExperimentVariantCreate
@@ -246,6 +247,16 @@ async def test_ingest_event_updates_variant_metrics(
         )
         assert response.status_code == 201
 
+    # Audit finding #78: verify the metrics were actually recorded, not
+    # just that ingestion returned 201.
+    response = await authorized_client.get(f"/api/v1/experiments/{exp_id}/results")
+    assert response.status_code == 200
+    by_name = {v["variant_name"]: v for v in response.json()["variant_results"]}
+    assert by_name["control"]["impressions"] == 10
+    assert by_name["control"]["conversions"] == 3
+    assert by_name["treatment"]["impressions"] == 10
+    assert by_name["treatment"]["conversions"] == 6
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/experiments/{id}/results — winner recommendation
@@ -283,6 +294,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(100):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="impression",
@@ -292,6 +304,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(3):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="conversion",
@@ -301,6 +314,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(100):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="impression",
@@ -310,6 +324,7 @@ async def test_experiment_results_recommends_winner(
     for i in range(15):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="conversion",
@@ -559,6 +574,7 @@ async def test_promote_winner(
     for i in range(50):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="impression",
@@ -568,6 +584,7 @@ async def test_promote_winner(
     for i in range(2):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=control_id,
             event_type="conversion",
@@ -577,6 +594,7 @@ async def test_promote_winner(
     for i in range(50):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="impression",
@@ -586,6 +604,7 @@ async def test_promote_winner(
     for i in range(10):
         await svc.ingest_event(
             db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
             experiment_id=exp_id,
             variant_id=treatment_id,
             event_type="conversion",
@@ -601,3 +620,403 @@ async def test_promote_winner(
     assert result["winner_variant_name"] == "treatment"
     assert "confidence" in result
     assert "reason" in result
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #10 — conversions > visitors must not crash statistics
+# ---------------------------------------------------------------------------
+
+
+def test_chi_squared_rejects_conversions_exceeding_visitors() -> None:
+    from pulse.core.experiment.statistics import bayesian_analysis, chi_squared_test
+
+    # Negative contingency cells (duplicate conversion events) previously
+    # produced chi2 < 0 -> math.sqrt ValueError.
+    result = chi_squared_test(150, 100, 10, 100)
+    assert result["error"] == "Invalid sample sizes"
+    assert result["is_significant"] is False
+
+    # p1 = 10/1 > 1 previously fed math.asin(math.sqrt(10)) -> domain error.
+    result = chi_squared_test(10, 1, 0, 1)
+    assert result["error"] == "Invalid sample sizes"
+
+    # Bayesian path gets the same guard (negative Beta parameters).
+    bayes = bayesian_analysis(10, 1, 0, 1)
+    assert bayes["error"] == "Invalid sample sizes"
+
+    # Valid tables still compute normally.
+    ok = chi_squared_test(10, 100, 15, 100)
+    assert "error" not in ok
+    assert 0.0 <= ok["p_value"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #12 — event ingestion must enforce workspace ownership
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_ingest_rejects_foreign_workspace_experiment(
+    async_session: AsyncSession,
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    """Events targeting another workspace's experiment are rejected (404)."""
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+    from pulse.models.workspace import Workspace
+
+    svc = ExperimentService()
+    other_ws_id = uuid.uuid4()
+    async_session.add(
+        Workspace(id=other_ws_id, name="Victim", slug=f"victim-{uuid.uuid4().hex[:8]}")
+    )
+    await async_session.commit()
+
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=other_ws_id,
+        data=ExperimentCreate(
+            name="Victim experiment",
+            variants=[ExperimentVariantCreate(name="control", weight=1.0)],
+        ),
+    )
+
+    response = await authorized_client.post(
+        "/api/v1/performance-events",
+        json={
+            "experiment_id": str(exp.id),
+            "variant_id": str(exp.variants[0].id),
+            "event_type": "conversion",
+            "visitor_hash": "attacker",
+        },
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_ingest_rejects_mismatched_variant(
+    async_session: AsyncSession,
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    """A variant that does not belong to the experiment is rejected (400)."""
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+
+    svc = ExperimentService()
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        data=ExperimentCreate(
+            name="Mismatch test",
+            variants=[ExperimentVariantCreate(name="control", weight=1.0)],
+        ),
+    )
+
+    response = await authorized_client.post(
+        "/api/v1/performance-events",
+        json={
+            "experiment_id": str(exp.id),
+            "variant_id": str(uuid.uuid4()),
+            "event_type": "conversion",
+        },
+    )
+    assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #43/#44 — conversion dedup and winner direction
+# ---------------------------------------------------------------------------
+
+
+def test_conversions_deduplicated_per_visitor() -> None:
+    from pulse.core.experiment.results import compute_results
+
+    variants = [
+        {"id": "c", "name": "control", "is_control": True},
+        {"id": "t", "name": "treatment", "is_control": False},
+    ]
+    events: list[dict[str, Any]] = []
+    for i in range(50):
+        events.append({"variant_id": "t", "event_type": "impression", "visitor_hash": f"v{i}"})
+        events.append({"variant_id": "t", "event_type": "conversion", "visitor_hash": f"v{i}"})
+    # 10 duplicate conversion events must not inflate the rate above 100%.
+    for i in range(10):
+        events.append({"variant_id": "t", "event_type": "conversion", "visitor_hash": f"v{i}"})
+
+    results = compute_results({"id": "e", "name": "exp"}, variants, events)
+    treatment = next(v for v in results["variant_results"] if v["variant_name"] == "treatment")
+    assert treatment["conversions"] == 50
+    assert treatment["visitor_count"] == 50
+
+
+def test_anonymous_conversions_keep_rate_at_most_one() -> None:
+    from pulse.core.experiment.results import compute_results
+
+    variants = [{"id": "t", "name": "treatment", "is_control": False}]
+    events = [
+        {"variant_id": "t", "event_type": "conversion", "visitor_hash": ""}
+        for _ in range(10)
+    ]
+    results = compute_results({"id": "e", "name": "exp"}, variants, events)
+    m = results["variant_results"][0]
+    assert m["conversions"] == 10
+    assert m["visitor_count"] == 10
+
+
+def test_winner_recommendation_not_inverted_with_three_arms() -> None:
+    """Audit #44: a significant treatment win must not be reported as control."""
+    from pulse.core.experiment.results import compute_results
+
+    variants = [
+        {"id": "c", "name": "control", "is_control": True},
+        {"id": "a", "name": "treatment_a", "is_control": False},
+        {"id": "b", "name": "treatment_b", "is_control": False},
+    ]
+    events: list[dict[str, Any]] = []
+    # control 10% of 1000, treatment_a 15% of 1000 (significant),
+    # treatment_b 20% of 10 (best raw rate, not significant).
+    for i in range(1000):
+        events.append({"variant_id": "c", "event_type": "impression", "visitor_hash": f"c{i}"})
+        if i < 100:
+            events.append({"variant_id": "c", "event_type": "conversion", "visitor_hash": f"c{i}"})
+        events.append({"variant_id": "a", "event_type": "impression", "visitor_hash": f"a{i}"})
+        if i < 150:
+            events.append({"variant_id": "a", "event_type": "conversion", "visitor_hash": f"a{i}"})
+    for i in range(10):
+        events.append({"variant_id": "b", "event_type": "impression", "visitor_hash": f"b{i}"})
+        if i < 2:
+            events.append({"variant_id": "b", "event_type": "conversion", "visitor_hash": f"b{i}"})
+
+    results = compute_results({"id": "e", "name": "exp"}, variants, events)
+    rec = results["winner_recommendation"]
+    assert rec["recommended_variant"] == "treatment_a"
+    assert "Control is statistically significantly better" not in rec["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #28/#54/#29 — promotion persistence, is_control, batch cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_promote_winner_persists_configuration(
+    async_session: AsyncSession,
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+    from pulse.models.experiment import Experiment
+
+    svc = ExperimentService()
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        data=ExperimentCreate(
+            name="Promotion persistence",
+            configuration={"randomisation_unit": "visitor"},
+            variants=[
+                ExperimentVariantCreate(name="control", weight=0.5, is_control=True),
+                ExperimentVariantCreate(name="treatment", weight=0.5),
+            ],
+        ),
+    )
+    await svc.start_experiment(async_session, exp.id, TEST_WORKSPACE_ID)
+    await svc.ingest_event(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        experiment_id=exp.id,
+        variant_id=exp.variants[1].id,
+        event_type="conversion",
+        visitor_hash="v1",
+    )
+
+    response = await authorized_client.post(f"/api/v1/experiments/{exp.id}/promote-winner")
+    assert response.status_code == 200
+
+    # Re-read from the database in a fresh state: winner info must be stored.
+    await async_session.rollback()
+    row = (
+        await async_session.execute(select(Experiment).where(Experiment.id == exp.id))
+    ).scalar_one()
+    assert row.configuration is not None
+    assert row.configuration.get("promoted_winner_name") is not None
+    assert row.configuration.get("randomisation_unit") == "visitor"
+
+
+@pytest.mark.anyio
+async def test_is_control_flag_is_persisted(
+    async_session: AsyncSession, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+
+    svc = ExperimentService()
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        data=ExperimentCreate(
+            name="Control flag",
+            variants=[
+                ExperimentVariantCreate(name="B", weight=0.5, is_control=True),
+                ExperimentVariantCreate(name="A", weight=0.5),
+            ],
+        ),
+    )
+    results = await svc.get_results(async_session, exp.id, TEST_WORKSPACE_ID)
+    by_name = {v["variant_name"]: v for v in results["variant_results"]}
+    assert by_name["B"]["is_control"] is True
+    assert by_name["A"]["is_control"] is False
+
+
+@pytest.mark.anyio
+async def test_event_batch_rejects_oversized_payload(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    events = [
+        {
+            "experiment_id": str(uuid.uuid4()),
+            "variant_id": str(uuid.uuid4()),
+            "event_type": "impression",
+        }
+        for _ in range(1001)
+    ]
+    response = await authorized_client.post(
+        "/api/v1/performance-events/batch", json={"events": events}
+    )
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #55 — updating variants preserves event attribution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_update_experiment_preserves_variant_ids_and_events(
+    async_session: AsyncSession,
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+    from pulse.models.performance_event import PerformanceEvent
+
+    svc = ExperimentService()
+    exp = await svc.create_experiment(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        data=ExperimentCreate(
+            name="Update preserves events",
+            variants=[
+                ExperimentVariantCreate(name="control", weight=0.5, is_control=True),
+                ExperimentVariantCreate(name="treatment", weight=0.5),
+            ],
+        ),
+    )
+    control_id = exp.variants[0].id
+    await svc.ingest_event(
+        db=async_session,
+        workspace_id=TEST_WORKSPACE_ID,
+        experiment_id=exp.id,
+        variant_id=control_id,
+        event_type="conversion",
+        visitor_hash="v1",
+    )
+
+    # Rename one variant, keep "control"; add a new one.
+    response = await authorized_client.put(
+        f"/api/v1/experiments/{exp.id}",
+        json={
+            "name": "Update preserves events",
+            "variants": [
+                {"name": "control", "weight": 0.4, "is_control": True},
+                {"name": "treatment_v2", "weight": 0.3},
+                {"name": "treatment_v3", "weight": 0.3},
+            ],
+        },
+    )
+    assert response.status_code == 200
+
+    # The surviving variant keeps its id, so the event stays attributed.
+    event = (
+        await async_session.execute(
+            select(PerformanceEvent).where(PerformanceEvent.experiment_id == exp.id)
+        )
+    ).scalar_one()
+    assert event.variant_id == control_id
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #82/#86 — basis-point assignment and tracking URLs
+# ---------------------------------------------------------------------------
+
+
+def test_assignment_uses_integer_basis_points() -> None:
+    from pulse.core.experiment.assignment import _assign_bucket
+
+    # 7% variant owns exactly buckets 0-699 at basis-point granularity
+    # (float cumulative math used to leak bucket boundaries).
+    weights = {"a": 0.07, "b": 0.93}
+    assert _assign_bucket(699, weights) == "a"
+    assert _assign_bucket(700, weights) == "b"
+    assert _assign_bucket(9999, weights) == "b"
+    # Sub-1% weights are representable at %10000 granularity.
+    tiny = {"rare": 0.005, "rest": 0.995}
+    assert _assign_bucket(49, tiny) == "rare"
+    assert _assign_bucket(50, tiny) == "rest"
+
+
+def test_tracking_url_preserves_repeated_and_blank_params() -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    from pulse.core.experiment.tracking import generate_tracking_url
+
+    url = generate_tracking_url(
+        "https://x.com/p?tag=a&tag=b&ref=", "exp1", "control"
+    )
+    params = parse_qs(urlparse(url).query, keep_blank_values=True)
+    assert params["tag"] == ["a", "b"]
+    assert params["ref"] == [""]
+    assert params["experiment_id"] == ["exp1"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #63 — list_experiments loads variants in one query
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_experiments_single_variant_query(
+    async_session: AsyncSession,
+    async_engine: Any,
+    test_workspace_and_user: tuple[Any, Any],
+) -> None:
+    from sqlalchemy import event
+
+    from pulse.api.schemas.experiment import ExperimentCreate, ExperimentVariantCreate
+
+    svc = ExperimentService()
+    for i in range(3):
+        await svc.create_experiment(
+            db=async_session,
+            workspace_id=TEST_WORKSPACE_ID,
+            data=ExperimentCreate(
+                name=f"N+1 probe {i}",
+                variants=[ExperimentVariantCreate(name="c", weight=1.0)],
+            ),
+        )
+
+    variant_queries = 0
+
+    def _count(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        nonlocal variant_queries
+        if "experiment_variants" in statement and statement.strip().upper().startswith("SELECT"):
+            variant_queries += 1
+
+    event.listen(async_engine.sync_engine, "before_cursor_execute", _count)
+    try:
+        items, total = await svc.list_experiments(async_session, TEST_WORKSPACE_ID)
+    finally:
+        event.remove(async_engine.sync_engine, "before_cursor_execute", _count)
+
+    assert total >= 3
+    assert len(items) >= 3
+    assert variant_queries == 1

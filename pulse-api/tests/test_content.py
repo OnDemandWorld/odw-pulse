@@ -8,6 +8,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.conftest import TEST_WORKSPACE_ID
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/content — authentication
 # ---------------------------------------------------------------------------
@@ -112,8 +114,11 @@ async def test_update_content_status(
     authorized_client: AsyncClient,
     test_workspace_and_user: tuple[Any, Any],
 ) -> None:
-    """Directly updating content status via PUT should work."""
-    # Create content
+    """Status transitions actually change the persisted status (audit #77).
+
+    ContentUpdate intentionally has no status field — transitions go
+    through the review workflow; the old test never exercised any of it.
+    """
     response = await authorized_client.post(
         "/api/v1/content",
         json={
@@ -123,11 +128,21 @@ async def test_update_content_status(
         },
     )
     assert response.status_code == 201
+    content_id = response.json()["id"]
+    assert response.json()["status"] == "draft"
 
-    # Filter list by status
-    response = await authorized_client.get("/api/v1/content?status=draft")
+    response = await authorized_client.post(f"/api/v1/content/{content_id}/submit")
     assert response.status_code == 200
-    assert response.json()["total"] == 1
+    assert response.json()["status"] == "review"
+
+    response = await authorized_client.post(f"/api/v1/content/{content_id}/approve")
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+
+    # The status filter reflects the persisted transition.
+    response = await authorized_client.get("/api/v1/content?status=approved")
+    assert response.status_code == 200
+    assert any(item["id"] == content_id for item in response.json()["items"])
 
 
 # ---------------------------------------------------------------------------
@@ -411,3 +426,136 @@ async def test_content_isolation_between_workspaces(
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 0  # No content visible in other workspace
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #57 — versions endpoint must obey the editorial guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_versions_endpoint_cannot_edit_approved_content(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content",
+        json={"slug": "approved-guard", "title": "Guarded", "body": "Original body."},
+    )
+    assert response.status_code == 201
+    content_id = response.json()["id"]
+
+    assert (
+        await authorized_client.post(f"/api/v1/content/{content_id}/submit")
+    ).status_code == 200
+    assert (
+        await authorized_client.post(f"/api/v1/content/{content_id}/approve")
+    ).status_code == 200
+
+    # Editing APPROVED content via versions must be refused.
+    response = await authorized_client.post(
+        f"/api/v1/content/{content_id}/versions", json={"body": "Hacked body."}
+    )
+    assert response.status_code == 400
+
+    response = await authorized_client.get(f"/api/v1/content/{content_id}")
+    assert response.json()["body"] == "Original body."
+
+    # Snapshot-only version creation (no body) is still allowed.
+    response = await authorized_client.post(f"/api/v1/content/{content_id}/versions")
+    assert response.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #64 — IntegrityError translates to 409, not 500
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_create_version_conflict_returns_409(
+    async_session: AsyncSession,
+    test_workspace_and_user: tuple[Any, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
+    from pulse.api.schemas.content import ContentCreate
+    from pulse.services.content_service import ContentService
+
+    svc = ContentService()
+    content = await svc.create(
+        async_session,
+        TEST_WORKSPACE_ID,
+        ContentCreate(slug="conflict-probe", title="Conflict"),
+    )
+
+    original_commit = async_session.commit
+
+    async def _conflicting_commit() -> None:
+        raise IntegrityError("INSERT ...", None, Exception("duplicate key"))
+
+    monkeypatch.setattr(async_session, "commit", _conflicting_commit)
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.create_version(async_session, content.id, TEST_WORKSPACE_ID)
+    assert exc_info.value.status_code == 409
+    monkeypatch.setattr(async_session, "commit", original_commit)
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #92/#93/#94 — content contract fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_content_response_serializes_metadata_not_metadata_(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content",
+        json={
+            "slug": "metadata-wire",
+            "title": "Metadata",
+            "metadata": {"k": "v"},
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["metadata"] == {"k": "v"}
+    assert "metadata_" not in data
+
+
+@pytest.mark.anyio
+async def test_versions_accepts_json_body(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content",
+        json={"slug": "json-version", "title": "V", "body": "Old body."},
+    )
+    content_id = response.json()["id"]
+
+    response = await authorized_client.post(
+        f"/api/v1/content/{content_id}/versions",
+        json={"body": "New body.", "change_note": "edit"},
+    )
+    assert response.status_code == 201
+    assert response.json()["body"] == "New body."
+
+    response = await authorized_client.get(f"/api/v1/content/{content_id}")
+    assert response.json()["body"] == "New body."
+
+
+@pytest.mark.anyio
+async def test_annotation_rejects_workflow_action_spoofing(
+    authorized_client: AsyncClient, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    response = await authorized_client.post(
+        "/api/v1/content", json={"slug": "spoof-probe", "title": "S"}
+    )
+    content_id = response.json()["id"]
+
+    response = await authorized_client.post(
+        f"/api/v1/content/{content_id}/annotations",
+        json={"action": "approved", "comment": "LGTM"},
+    )
+    assert response.status_code == 422

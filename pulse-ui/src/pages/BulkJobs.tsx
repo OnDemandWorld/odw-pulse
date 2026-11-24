@@ -3,10 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient, { apiErrorMessage } from '@/api/client';
 import { BulkJob, BulkJobStatus, ListResponse } from '@/types';
 
-function fetchBulkJobs() {
+const PAGE_SIZE = 20;
+
+function fetchBulkJobs(offset: number) {
   return apiClient
-    .get<ListResponse<BulkJob>>('/bulk-jobs')
-    .then((res) => res.data.items);
+    .get<ListResponse<BulkJob>>('/bulk-jobs', { params: { limit: PAGE_SIZE, offset } })
+    .then((res) => res.data);
 }
 
 interface BulkJobForm {
@@ -18,6 +20,7 @@ interface BulkJobForm {
 const STATUS_COLORS: Record<BulkJobStatus, string> = {
   pending: 'bg-gray-100 text-gray-700',
   running: 'bg-blue-100 text-blue-700',
+  paused: 'bg-amber-100 text-amber-700',
   succeeded: 'bg-green-100 text-green-700',
   failed: 'bg-red-100 text-red-700',
   cancelled: 'bg-yellow-100 text-yellow-700',
@@ -32,12 +35,21 @@ export default function BulkJobs() {
     target_market: 'en-US',
   });
   const [error, setError] = useState<string | null>(null);
+  const [offset, setOffset] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { data: jobs, isLoading, error: queryError } = useQuery({
-    queryKey: ['bulk-jobs'],
-    queryFn: fetchBulkJobs,
+  const { data: jobsPage, isLoading, error: queryError } = useQuery({
+    queryKey: ['bulk-jobs', offset],
+    queryFn: () => fetchBulkJobs(offset),
+    // Jobs progress asynchronously in the worker; poll while any are
+    // active so progress/download UI updates (audit finding #35).
+    refetchInterval: (query) =>
+      query.state.data?.items.some((j) => j.status === 'pending' || j.status === 'running')
+        ? 3000
+        : false,
   });
+  const jobs = jobsPage?.items;
+  const total = jobsPage?.total ?? 0;
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -68,15 +80,21 @@ export default function BulkJobs() {
   };
 
   const downloadResults = async (job: BulkJob) => {
-    const response = await apiClient.get(`/bulk-jobs/${job.id}/download`, {
-      responseType: 'blob',
-    });
-    const url = URL.createObjectURL(response.data as Blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `bulk_job_${job.id}.csv`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    // Audit finding #36: surface failures instead of an unhandled rejection,
+    // and defer revokeObjectURL so the download reliably starts (Firefox).
+    try {
+      const response = await apiClient.get(`/bulk-jobs/${job.id}/download`, {
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(response.data as Blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `bulk_job_${job.id}.csv`;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Failed to download results'));
+    }
   };
 
   return (
@@ -163,7 +181,7 @@ export default function BulkJobs() {
           </div>
         )}
 
-        {jobs && jobs.length === 0 && (
+        {total === 0 && (
           <div className="p-8 text-center text-gray-500">No bulk jobs yet.</div>
         )}
 
@@ -237,6 +255,29 @@ export default function BulkJobs() {
           </table>
         )}
       </div>
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
+          <span>
+            Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="space-x-2">
+            <button
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              disabled={offset + PAGE_SIZE >= total}
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+              className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -120,10 +120,19 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    user_id = uuid.UUID(str(payload["sub"]))
-    workspace_id = uuid.UUID(str(payload["workspace_id"]))
-    email = str(payload["email"])
-    role = str(payload["role"])
+    # Audit finding #96: a signed token with missing/malformed claims must
+    # yield a clean 401, not a KeyError/ValueError 500.
+    try:
+        user_id = uuid.UUID(str(payload["sub"]))
+        workspace_id = uuid.UUID(str(payload["workspace_id"]))
+        email = str(payload["email"])
+        role = str(payload["role"])
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token claims",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
     jti_raw = payload.get("jti")
     jti = str(jti_raw) if jti_raw is not None else None
     issued_at = _claim_timestamp(payload.get("iat"))
@@ -170,8 +179,16 @@ async def get_current_user(
     except HTTPException:
         raise
     except (ProgrammingError, OperationalError) as exc:
-        message = str(exc.orig) if exc.orig is not None else str(exc)
-        if "no such table" in message.lower() or "does not exist" in message.lower():
+        # Audit finding #95: only the specific undefined-TABLE condition
+        # fails open (users table not migrated yet). The old broad
+        # "does not exist" substring also matched missing COLUMNS (e.g.
+        # users.is_active after a partial migration), silently skipping
+        # existence/is_active validation for deactivated users.
+        orig = exc.orig
+        sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+        message = str(orig) if orig is not None else str(exc)
+        undefined_users_table = sqlstate == "42P01" or "no such table: users" in message.lower()
+        if undefined_users_table:
             # users table not migrated yet — accept the token claims.
             pass
         else:

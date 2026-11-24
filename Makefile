@@ -1,3 +1,6 @@
+# Recipes use 'source' (bash); dash on Linux would fail (audit #70).
+SHELL := /bin/bash
+
 .PHONY: help install dev api worker scheduler ui test lint typecheck build
 
 help:

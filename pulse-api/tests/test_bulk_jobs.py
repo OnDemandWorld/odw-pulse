@@ -352,3 +352,114 @@ async def test_cannot_resume_non_paused_job(
     # Try to resume (job is pending, not paused)
     response = await authorized_client.post(f"/api/v1/bulk-jobs/{job_id}/resume")
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #26/#27 — conditional transitions + atomic progress
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_state_transitions_are_conditional(
+    async_session: AsyncSession, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    from fastapi import HTTPException
+
+    svc = BulkJobService()
+    job = await svc.create_job(
+        db=async_session, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=1
+    )
+
+    # pause requires RUNNING — PENDING must be refused.
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.pause(async_session, job.id, TEST_WORKSPACE_ID)
+    assert exc_info.value.status_code == 400
+
+    await svc.update_status(async_session, job.id, TEST_WORKSPACE_ID, BulkJobStatus.RUNNING)
+    paused = await svc.pause(async_session, job.id, TEST_WORKSPACE_ID)
+    assert paused.status == BulkJobStatus.PAUSED
+    resumed = await svc.resume(async_session, job.id, TEST_WORKSPACE_ID)
+    assert resumed.status == BulkJobStatus.RUNNING
+    cancelled = await svc.cancel(async_session, job.id, TEST_WORKSPACE_ID)
+    assert cancelled.status == BulkJobStatus.CANCELLED
+
+    # A second cancel must not pass a stale Python-side check.
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.cancel(async_session, job.id, TEST_WORKSPACE_ID)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_increment_progress_accumulates_atomically(
+    async_session: AsyncSession, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    svc = BulkJobService()
+    job = await svc.create_job(
+        db=async_session, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=10
+    )
+    await svc.increment_progress(async_session, job.id, TEST_WORKSPACE_ID, count=3)
+    await svc.increment_progress(async_session, job.id, TEST_WORKSPACE_ID, count=4)
+    fresh = await svc.get_job(async_session, job.id, TEST_WORKSPACE_ID)
+    assert fresh.progress == 7
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #99/#98 — filename sanitization and task references
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_upload_filename_with_separator_is_sanitized(
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pulse.api.v1.bulk_jobs as bulk_jobs
+
+    async def _no_enqueue(job_id: str) -> bool:
+        return False
+
+    async def _noop_in_process(job_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(bulk_jobs, "enqueue_job", _no_enqueue)
+    monkeypatch.setattr(bulk_jobs, "_run_in_process", _noop_in_process)
+
+    csv_content = b"prompt\nHello\n"
+    files = {"file": ("a/b.csv", io.BytesIO(csv_content), "text/csv")}
+    response = await authorized_client.post("/api/v1/bulk-jobs", files=files)
+    assert response.status_code == 201
+
+
+@pytest.mark.anyio
+async def test_fallback_task_holds_strong_reference(
+    authorized_client: AsyncClient,
+    test_workspace_and_user: tuple[Any, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    import pulse.api.v1.bulk_jobs as bulk_jobs
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _no_enqueue(job_id: str) -> bool:
+        return False
+
+    async def _slow_in_process(job_id: str) -> None:
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(bulk_jobs, "enqueue_job", _no_enqueue)
+    monkeypatch.setattr(bulk_jobs, "_run_in_process", _slow_in_process)
+
+    files = {"file": ("ref.csv", io.BytesIO(b"prompt\nHi\n"), "text/csv")}
+    response = await authorized_client.post("/api/v1/bulk-jobs", files=files)
+    assert response.status_code == 201
+
+    await asyncio.wait_for(started.wait(), timeout=2.0)
+    assert len(bulk_jobs._background_tasks) >= 1
+    release.set()
+    await asyncio.sleep(0.05)
+    assert len(bulk_jobs._background_tasks) == 0

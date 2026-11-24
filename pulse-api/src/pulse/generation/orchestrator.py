@@ -8,12 +8,16 @@ to produce the final generated content.
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 
+from sqlalchemy import select
+
 from pulse.cultural.engine import CulturalAdaptationEngine
-from pulse.cultural.market_profile import load_market_profile
-from pulse.generation.models import GenerationRequest, GenerationResult
-from pulse.llm.fallback_router import FallbackRouter
+from pulse.cultural.market_profile import load_market_profile_with_fallback
+from pulse.generation.models import GenerationError, GenerationRequest, GenerationResult
+from pulse.llm.fallback_router import CircuitOpenError, FallbackRouter
+from pulse.models.brand_voice import BrandVoice
 from pulse.prompts.composer import PromptComposer
 from pulse.quality.engine import QualityScoringEngine
 
@@ -71,7 +75,12 @@ class GenerationOrchestrator:
         self._quality_engine = quality_engine or QualityScoringEngine()
         self._db_session_factory = db_session_factory
 
-    async def generate(self, request: GenerationRequest) -> GenerationResult:
+    async def generate(
+        self,
+        request: GenerationRequest,
+        *,
+        workspace_id: uuid.UUID | None = None,
+    ) -> GenerationResult:
         """Execute the full generation pipeline.
 
         Steps:
@@ -92,16 +101,36 @@ class GenerationOrchestrator:
         """
         start_time = time.time()
 
-        # Step 1 & 2: Load market profile and brand voice (if DB available)
+        # Step 1 & 2: Load market profile and brand voice (if DB available).
+        # Audit findings #19/#20: production callers now pass a session
+        # factory, and brand_voice_id is actually looked up (workspace-scoped).
         market_dimensions: dict[str, Any] = {}
         brand_voice_data: dict[str, Any] = {}
 
         if self._db_session_factory:
             async with self._db_session_factory() as session:
                 if request.target_market:
-                    profile = await load_market_profile(session, request.target_market)
+                    profile = await load_market_profile_with_fallback(
+                        session, request.target_market
+                    )
                     if profile:
                         market_dimensions = profile.get("cultural_dimensions", {})
+                if request.brand_voice_id and workspace_id is not None:
+                    try:
+                        bv_id = uuid.UUID(request.brand_voice_id)
+                    except ValueError:
+                        bv_id = None
+                    if bv_id is not None:
+                        voice = (
+                            await session.execute(
+                                select(BrandVoice).where(
+                                    BrandVoice.id == bv_id,
+                                    BrandVoice.workspace_id == workspace_id,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if voice is not None:
+                            brand_voice_data = {"tone_profile": voice.tone_profile or {}}
 
         # Step 3: Run cultural adaptation
         cultural_directive = self._cultural_engine.adapt(
@@ -135,19 +164,35 @@ class GenerationOrchestrator:
             context,
         )
 
-        full_prompt = f"{composed['system']}\n\n{composed['user']}"
-
         # Step 5: Select LLM provider via fallback router
-        provider = await self._router.route_request()
+        try:
+            provider = await self._router.route_request()
+        except CircuitOpenError as err:
+            raise GenerationError("LLM provider unavailable (circuit open)") from err
 
-        # Step 6: Call provider
-        llm_response = await provider.generate(full_prompt, request.llm_params)
+        # Step 6: Call provider. System and user prompts are sent separately
+        # so the cultural/brand guidelines keep system-role authority
+        # (audit finding #14).
+        llm_response = await provider.generate(
+            composed["user"], request.llm_params, system=composed["system"]
+        )
 
         # Record success/failure for circuit breaker
         if llm_response.finish_reason == "error":
-            await self._router.record_failure()
-        else:
-            await self._router.record_success()
+            status_code = llm_response.metadata.get("status_code")
+            # Audit finding #15: client-caused 4xx errors (bad params/model)
+            # must not trip the global breaker for every tenant. Only
+            # server-side/network failures count against provider health.
+            if not isinstance(status_code, int) or status_code >= 500:
+                await self._router.record_failure(provider.provider_name)
+            # Never return a provider failure as a successful result: an
+            # empty-text "success" would mark bulk jobs SUCCEEDED with no
+            # content. Propagate so callers record a real failure.
+            raise GenerationError(
+                "LLM provider failed to generate content",
+                status_code=int(status_code) if isinstance(status_code, int) else None,
+            )
+        await self._router.record_success(provider.provider_name)
 
         # Step 7: Run quality scoring
         quality_result = self._quality_engine.score(

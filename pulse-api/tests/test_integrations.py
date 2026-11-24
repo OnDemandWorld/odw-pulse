@@ -91,6 +91,12 @@ async def test_storage_client_upload_and_download() -> None:
     assert info["bucket"] == "pulse-test"
     assert data == b"hello-storage"
 
+    # Audit finding #79: the mock must not mask missing authentication —
+    # assert the outgoing requests are actually SigV4-signed.
+    assert len(transport.requests) == 2
+    for request in transport.requests:
+        assert request.headers.get("Authorization", "").startswith("AWS4-HMAC-SHA256")
+
 
 # ---------------------------------------------------------------------------
 # Webhook dispatcher
@@ -183,18 +189,21 @@ async def test_segment_connector_sends_event() -> None:
         "not a url at all",  # no scheme/host
     ],
 )
-def test_webhook_url_guard_blocks_dangerous_targets(url: str) -> None:
+@pytest.mark.anyio
+async def test_webhook_url_guard_blocks_dangerous_targets(url: str) -> None:
     """Private/loopback/link-local addresses and non-http(s) schemes are rejected."""
     with pytest.raises(WebhookURLBlockedError):
-        validate_webhook_url(url)
+        await validate_webhook_url(url)
 
 
-def test_webhook_url_guard_allows_public_https() -> None:
+async def test_webhook_url_guard_allows_public_https() -> None:
     """A public HTTPS endpoint passes validation (no DNS needed for literals)."""
-    validate_webhook_url("https://93.184.216.34/hook")  # example.com address
+    ips = await validate_webhook_url("https://93.184.216.34/hook")  # example.com address
+    assert ips == ["93.184.216.34"]
 
 
-def test_webhook_url_guard_blocks_hostnames_resolving_private(
+@pytest.mark.anyio
+async def test_webhook_url_guard_blocks_hostnames_resolving_private(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Hostnames that resolve to blocked ranges are rejected too."""
@@ -207,10 +216,11 @@ def test_webhook_url_guard_blocks_hostnames_resolving_private(
 
     monkeypatch.setattr(url_guard.socket, "getaddrinfo", _fake_getaddrinfo)
     with pytest.raises(WebhookURLBlockedError, match="blocked address"):
-        validate_webhook_url("https://internal.corp/hook")
+        await validate_webhook_url("https://internal.corp/hook")
 
 
-def test_webhook_url_guard_production_requires_https(
+@pytest.mark.anyio
+async def test_webhook_url_guard_production_requires_https(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """In production only the https scheme is accepted."""
@@ -221,8 +231,8 @@ def test_webhook_url_guard_production_requires_https(
 
     monkeypatch.setattr(url_guard, "get_settings", lambda: _ProdSettings())
     with pytest.raises(WebhookURLBlockedError, match="not allowed"):
-        validate_webhook_url("http://93.184.216.34/hook")
-    validate_webhook_url("https://93.184.216.34/hook")
+        await validate_webhook_url("http://93.184.216.34/hook")
+    await validate_webhook_url("https://93.184.216.34/hook")
 
 
 @pytest.mark.asyncio
@@ -257,3 +267,107 @@ async def test_register_webhook_with_public_url_succeeds(
     )
     assert response.status_code == 201
     assert response.json()["url"] == "https://93.184.216.34/hook"
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #45 — connection is pinned to the validated IP
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_pinned_backend_connects_to_validated_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from httpcore._backends.anyio import AnyIOBackend
+
+    from pulse.integrations.webhooks.dispatcher import _PinnedBackend
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_connect(self: Any, host: str, port: int, **kwargs: Any) -> Any:
+        captured["host"] = host
+        captured["port"] = port
+        return object()
+
+    monkeypatch.setattr(AnyIOBackend, "connect_tcp", _fake_connect)
+    backend = _PinnedBackend("93.184.216.34")
+    await backend.connect_tcp("rebind.attacker.example", 443)
+    assert captured["host"] == "93.184.216.34"
+    assert captured["port"] == 443
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #83/#84/#85 — analytics + storage hardening
+# ---------------------------------------------------------------------------
+
+
+def test_mixpanel_token_cannot_be_overwritten() -> None:
+    from pulse.integrations.analytics.mixpanel import MixpanelConnector
+
+    connector = MixpanelConnector(project_token="real-token")
+    payload = connector.normalize(
+        {
+            "event_name": "x",
+            "user_id": "u1",
+            "properties": {"token": "evil-token", "distinct_id": "evil", "k": "v"},
+        }
+    )
+    assert payload["properties"]["token"] == "real-token"
+    assert payload["properties"]["distinct_id"] == "u1"
+    assert payload["properties"]["k"] == "v"
+
+
+@pytest.mark.anyio
+async def test_analytics_send_logs_failed_delivery() -> None:
+    from pulse.integrations.analytics.ga4 import GA4Connector
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(403))
+    connector = GA4Connector(
+        measurement_id="G-TEST",
+        api_secret="s",
+        http_client=httpx.AsyncClient(transport=transport),
+    )
+    # Must not raise, but must not silently swallow either (log warning).
+    await connector.send({"event_name": "x", "user_id": "u"})
+
+
+@pytest.mark.anyio
+async def test_storage_requests_are_sigv4_signed() -> None:
+    from pulse.integrations.storage.client import StorageClient
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, headers={"ETag": '"abc"'})
+
+    client = StorageClient(
+        endpoint="http://minio:9000",
+        access_key="AK",
+        secret_key="SK",
+        bucket="b",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    await client.upload_file("report final.csv", b"data")
+    await client.download_file("report final.csv")
+
+    for request in seen:
+        auth = request.headers.get("Authorization", "")
+        assert auth.startswith("AWS4-HMAC-SHA256 Credential=AK/")
+        assert "Signature=" in auth
+        assert request.headers.get("x-amz-content-sha256")
+    # The signed canonical resource must match the encoded URL path.
+    assert "/b/report%20final.csv" in str(seen[0].url)
+
+
+@pytest.mark.anyio
+async def test_presigned_url_uses_sigv4_query_auth() -> None:
+    from pulse.integrations.storage.client import StorageClient
+
+    client = StorageClient(
+        endpoint="http://minio:9000", access_key="AK", secret_key="SK", bucket="b"
+    )
+    url = await client.get_presigned_url("report final.csv")
+    assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in url
+    assert "X-Amz-Signature=" in url
+    assert "/b/report%20final.csv?" in url

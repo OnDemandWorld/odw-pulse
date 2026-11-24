@@ -10,12 +10,11 @@ changing the call-sites.
 
 from __future__ import annotations
 
-import base64
 import datetime as dt
 import hashlib
 import hmac
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlsplit
 
 import httpx
 
@@ -81,35 +80,111 @@ class StorageClient:
         safe_key = quote(key, safe="/")
         return f"{self._endpoint}/{self._bucket}/{safe_key}"
 
-    def _sign(
+    @staticmethod
+    def _sha256_hex(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    def _signing_key(self, date_stamp: str) -> bytes:
+        k_date = hmac.new(
+            f"AWS4{self._secret_key}".encode(), date_stamp.encode(), hashlib.sha256
+        ).digest()
+        k_region = hmac.new(k_date, self._region.encode(), hashlib.sha256).digest()
+        k_service = hmac.new(k_region, b"s3", hashlib.sha256).digest()
+        return hmac.new(k_service, b"aws4_request", hashlib.sha256).digest()
+
+    def _sigv4_headers(
         self,
         method: str,
-        key: str,
-        content_type: str = "",
-        expires: int = 3600,
+        url: str,
+        payload: bytes,
+        content_type: str | None = None,
     ) -> dict[str, str]:
-        """Generate a minimal V2-style signature for presigned URLs.
+        """AWS SigV4 header authentication (audit finding #85).
 
-        This is a simplified demonstration signature — production code
-        should use full AWS SigV4.
+        Replaces the previous unauthenticated PUT/GET, which only worked
+        against public buckets (MinIO/S3 reject them with 403).
         """
+        parsed = urlsplit(url)
         now = dt.datetime.now(dt.UTC)
-        date_str = now.strftime("%a, %d %b %Y %H:%M:%S GMT")
-        expiry = int(now.timestamp()) + expires
-        string_to_sign = f"{method}\n\n{content_type}\n{expiry}\n/{self._bucket}/{key}"
-        signature = base64.b64encode(
-            hmac.new(
-                self._secret_key.encode(),
-                string_to_sign.encode(),
-                hashlib.sha1,
-            ).digest()
-        ).decode()
-        return {
-            "AWSAccessKeyId": self._access_key,
-            "Expires": str(expiry),
-            "Signature": signature,
-            "Date": date_str,
+        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+        date_stamp = now.strftime("%Y%m%d")
+        payload_hash = self._sha256_hex(payload)
+
+        headers = {
+            "host": parsed.netloc,
+            "x-amz-content-sha256": payload_hash,
+            "x-amz-date": amz_date,
         }
+        if content_type is not None:
+            headers["content-type"] = content_type
+        signed_headers = ";".join(sorted(headers))
+        canonical_headers = "".join(
+            f"{k}:{headers[k].strip()}\n" for k in sorted(headers)
+        )
+        canonical_query = "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}"
+            for k, v in sorted(parse_qsl(parsed.query, keep_blank_values=True))
+        )
+        canonical_request = (
+            f"{method}\n{parsed.path}\n{canonical_query}\n"
+            f"{canonical_headers}\n{signed_headers}\n{payload_hash}"
+        )
+        scope = f"{date_stamp}/{self._region}/s3/aws4_request"
+        string_to_sign = (
+            f"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n"
+            f"{self._sha256_hex(canonical_request.encode())}"
+        )
+        signature = hmac.new(
+            self._signing_key(date_stamp), string_to_sign.encode(), hashlib.sha256
+        ).hexdigest()
+        result = {
+            "x-amz-date": amz_date,
+            "x-amz-content-sha256": payload_hash,
+            "Authorization": (
+                f"AWS4-HMAC-SHA256 Credential={self._access_key}/{scope}, "
+                f"SignedHeaders={signed_headers}, Signature={signature}"
+            ),
+        }
+        if content_type is not None:
+            result["Content-Type"] = content_type
+        return result
+
+    def _presign_params(self, key: str, expires: int) -> dict[str, str]:
+        """SigV4 query-string presigning for temporary GET access.
+
+        Audit finding #85: signs the SAME percent-encoded canonical
+        resource that appears in the URL (the old V2-style demo signature
+        used the raw key and mismatched for spaces/unicode).
+        """
+        url = self._object_url(key)
+        parsed = urlsplit(url)
+        now = dt.datetime.now(dt.UTC)
+        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+        date_stamp = now.strftime("%Y%m%d")
+        scope = f"{date_stamp}/{self._region}/s3/aws4_request"
+        params = {
+            "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+            "X-Amz-Credential": f"{self._access_key}/{scope}",
+            "X-Amz-Date": amz_date,
+            "X-Amz-Expires": str(expires),
+            "X-Amz-SignedHeaders": "host",
+        }
+        canonical_query = "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}"
+            for k, v in sorted(params.items())
+        )
+        canonical_request = (
+            f"GET\n{parsed.path}\n{canonical_query}\n"
+            f"host:{parsed.netloc}\n\nhost\nUNSIGNED-PAYLOAD"
+        )
+        string_to_sign = (
+            f"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n"
+            f"{self._sha256_hex(canonical_request.encode())}"
+        )
+        signature = hmac.new(
+            self._signing_key(date_stamp), string_to_sign.encode(), hashlib.sha256
+        ).hexdigest()
+        return {**params, "X-Amz-Signature": signature}
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,10 +204,7 @@ class StorageClient:
             data = data.encode()
 
         url = self._object_url(key)
-        headers = {"Content-Type": content_type}
-
-        # In a real implementation we'd add Authorization headers here.
-        # For now we just PUT the bytes.
+        headers = self._sigv4_headers("PUT", url, data, content_type=content_type)
         response = await self._http.put(url, content=data, headers=headers)
         response.raise_for_status()
 
@@ -146,7 +218,8 @@ class StorageClient:
     async def download_file(self, key: str) -> bytes:
         """Download the object at *key* and return its raw bytes."""
         url = self._object_url(key)
-        response = await self._http.get(url)
+        headers = self._sigv4_headers("GET", url, b"")
+        response = await self._http.get(url, headers=headers)
         response.raise_for_status()
         return response.content
 
@@ -156,7 +229,9 @@ class StorageClient:
         expires: int = 3600,
     ) -> str:
         """Return a presigned URL that grants temporary GET access to *key*."""
-        params = self._sign("GET", key, expires=expires)
+        params = self._presign_params(key, expires=expires)
         url = self._object_url(key)
-        query = "&".join(f"{quote(k)}={quote(v)}" for k, v in params.items())
+        query = "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params.items()
+        )
         return f"{url}?{query}"

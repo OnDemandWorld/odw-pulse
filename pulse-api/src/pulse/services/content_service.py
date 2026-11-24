@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -67,7 +68,16 @@ class ContentService:
             updated_at=datetime.now(UTC),
         )
         db.add(content)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            # Concurrent create with the same slug lost the pre-check race
+            # (audit finding #64) — translate to a clean 409, not a 500.
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Content with slug '{data.slug}' already exists in this workspace",
+            ) from err
         await db.refresh(content)
         return content
 
@@ -197,6 +207,18 @@ class ContentService:
         """Create a new version snapshot of the content."""
         content = await self.get(db, content_id, workspace_id)
 
+        # Audit finding #57: editing via the versions endpoint must obey the
+        # same editorial guard as update() — otherwise APPROVED content can
+        # be rewritten without re-review.
+        if body is not None and content.status not in (
+            ContentStatus.DRAFT,
+            ContentStatus.REJECTED,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot edit content in '{content.status.value}' status",
+            )
+
         # Determine next version number
         result = await db.execute(
             select(func.max(ContentVersion.version_number)).where(
@@ -215,6 +237,7 @@ class ContentService:
         version = ContentVersion(
             id=uuid.uuid4(),
             content_piece_id=content_id,
+            workspace_id=workspace_id,
             version_number=next_version,
             body=content.body,
             metadata_=content.metadata_,
@@ -224,7 +247,16 @@ class ContentService:
             created_at=datetime.now(UTC),
         )
         db.add(version)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as err:
+            # Concurrent snapshots computed the same max+1 version number
+            # (audit finding #64) — clean 409 instead of an unhandled 500.
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Concurrent version creation conflict; retry the request",
+            ) from err
         await db.refresh(version)
         return version
 

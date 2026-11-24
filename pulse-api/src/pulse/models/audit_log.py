@@ -54,8 +54,11 @@ class AuditLog(Base):
         default=dict,
         comment="Free-form structured payload describing the action.",
     )
+    # Part of the composite PK: the table is RANGE-partitioned on created_at
+    # and PostgreSQL requires the partition key in the PK (audit finding #3).
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        primary_key=True,
         nullable=False,
         server_default=func.now(),
     )

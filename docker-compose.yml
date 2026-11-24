@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: pulse
       POSTGRES_DB: pulse
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,7 +18,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -32,8 +32,8 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -42,13 +42,34 @@ services:
       timeout: 3s
       retries: 5
 
+  # One-shot schema migration (audit finding #6): runs alembic before any
+  # app service starts. App services gate on its successful completion.
+  migrate:
+    build:
+      context: ./pulse-api
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   pulse-api:
     build:
       context: ./pulse-api
       dockerfile: Dockerfile
+    # Loopback-only publish (audit findings #52/#69): the UI nginx proxy
+    # reaches the API over the compose network; direct external access to
+    # the unproxied API (spoofable XFF, no body limit) is closed off.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
+      PULSE_ENV: development
       DATABASE_URL: postgresql+asyncpg://pulse:pulse@postgres:5432/pulse
       # Pre-auth (login/register) lookups run on this privileged connection;
       # empty falls back to DATABASE_URL (the env_file below passes it through
@@ -63,6 +84,11 @@ services:
     env_file:
       - path: .env
         required: false
+    # Shared with pulse-worker so uploaded CSVs and result files are visible
+    # to both processes (audit finding #7). Paths must match worker.tasks.
+    volumes:
+      - bulk_uploads:/tmp/pulse_bulk_uploads
+      - bulk_outputs:/tmp/pulse_bulk_outputs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
       interval: 10s
@@ -75,6 +101,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   pulse-worker:
     build:
@@ -86,11 +114,17 @@ services:
     env_file:
       - path: .env
         required: false
+    # Same shared volumes as pulse-api (audit finding #7).
+    volumes:
+      - bulk_uploads:/tmp/pulse_bulk_uploads
+      - bulk_outputs:/tmp/pulse_bulk_outputs
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   pulse-scheduler:
     build:
@@ -107,6 +141,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   pulse-ui:
     build:
@@ -125,3 +161,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  # Bulk-job input/output payloads shared between pulse-api and pulse-worker
+  # (audit finding #7).
+  bulk_uploads:
+  bulk_outputs:

@@ -20,6 +20,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "001_initial_schema"
@@ -52,6 +53,7 @@ def upgrade() -> None:
     bulk_job_status = sa.Enum(
         "pending",
         "running",
+        "paused",
         "succeeded",
         "failed",
         "cancelled",
@@ -110,7 +112,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid, server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("name", sa.Text, nullable=False),
         sa.Column("slug", sa.Text, nullable=False),
-        sa.Column("settings", sa.JSON, nullable=True),
+        sa.Column("settings", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -170,7 +172,7 @@ def upgrade() -> None:
             comment="ISO 639-1 language code optionally suffixed with a region, e.g. 'en-US'.",
         ),
         sa.Column("name", sa.Text, nullable=False),
-        sa.Column("cultural_dimensions", sa.JSON, nullable=True),
+        sa.Column("cultural_dimensions", postgresql.JSONB, nullable=True),
         sa.Column(
             "fallback_code",
             sa.Text,
@@ -194,7 +196,7 @@ def upgrade() -> None:
         ),
         sa.Column("prompt", sa.Text, nullable=False),
         sa.Column("response", sa.Text, nullable=False),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column("provider", sa.Text, nullable=True),
         sa.Column("model", sa.Text, nullable=True),
         sa.Column(
@@ -227,7 +229,7 @@ def upgrade() -> None:
         sa.Column("slug", sa.Text, nullable=False),
         sa.Column("title", sa.Text, nullable=False),
         sa.Column("body", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "status",
             sa.Enum(
@@ -255,7 +257,9 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.PrimaryKeyConstraint("id"),
+        # PostgreSQL requires the partition key in every PK/unique constraint
+        # on a partitioned table (audit finding #3).
+        sa.PrimaryKeyConstraint("id", "workspace_id"),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         sa.UniqueConstraint("workspace_id", "slug", name="uq_content_pieces_workspace_slug"),
         comment="Content pieces — partitioned by HASH(workspace_id) into 16 partitions.",
@@ -277,9 +281,10 @@ def upgrade() -> None:
         "content_versions",
         sa.Column("id", sa.Uuid, server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("content_piece_id", sa.Uuid, nullable=False),
+        sa.Column("workspace_id", sa.Uuid, nullable=False),
         sa.Column("version_number", sa.Integer, nullable=False),
         sa.Column("body", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "status",
             sa.Enum(
@@ -303,7 +308,13 @@ def upgrade() -> None:
         ),
         sa.Column("created_by", sa.Uuid, nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.ForeignKeyConstraint(["content_piece_id"], ["content_pieces.id"], ondelete="CASCADE"),
+        # Composite FK: content_pieces is partitioned by workspace_id, so a
+        # referenced unique key must include it (audit finding #3).
+        sa.ForeignKeyConstraint(
+            ["content_piece_id", "workspace_id"],
+            ["content_pieces.id", "content_pieces.workspace_id"],
+            ondelete="CASCADE",
+        ),
         sa.ForeignKeyConstraint(["created_by"], ["users.id"], ondelete="SET NULL"),
         sa.UniqueConstraint(
             "content_piece_id",
@@ -322,10 +333,11 @@ def upgrade() -> None:
         "review_annotations",
         sa.Column("id", sa.Uuid, server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("content_piece_id", sa.Uuid, nullable=False),
+        sa.Column("workspace_id", sa.Uuid, nullable=False),
         sa.Column("user_id", sa.Uuid, nullable=True),
         sa.Column("action", sa.Text, nullable=False),
         sa.Column("comment", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -333,7 +345,11 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.ForeignKeyConstraint(["content_piece_id"], ["content_pieces.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["content_piece_id", "workspace_id"],
+            ["content_pieces.id", "content_pieces.workspace_id"],
+            ondelete="CASCADE",
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
         comment="Review annotations and actions on content pieces.",
     )
@@ -349,8 +365,8 @@ def upgrade() -> None:
         sa.Column("workspace_id", sa.Uuid, nullable=False),
         sa.Column("name", sa.Text, nullable=False),
         sa.Column("description", sa.Text, nullable=True),
-        sa.Column("tone_profile", sa.JSON, nullable=True),
-        sa.Column("guidelines", sa.JSON, nullable=True),
+        sa.Column("tone_profile", postgresql.JSONB, nullable=True),
+        sa.Column("guidelines", postgresql.JSONB, nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         comment="Brand voice / tone configuration per workspace.",
@@ -363,7 +379,7 @@ def upgrade() -> None:
         sa.Column("workspace_id", sa.Uuid, nullable=False),
         sa.Column("name", sa.Text, nullable=False),
         sa.Column("description", sa.Text, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -383,8 +399,8 @@ def upgrade() -> None:
         sa.Column("glossary_id", sa.Uuid, nullable=False),
         sa.Column("term", sa.Text, nullable=False),
         sa.Column("definition", sa.Text, nullable=True),
-        sa.Column("translations", sa.JSON, nullable=True),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("translations", postgresql.JSONB, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -420,7 +436,7 @@ def upgrade() -> None:
         sa.Column("progress", sa.Integer, server_default="0", nullable=False),
         sa.Column("input_file", sa.Text, nullable=True),
         sa.Column("output_file", sa.Text, nullable=True),
-        sa.Column("errors", sa.JSON, nullable=True),
+        sa.Column("errors", postgresql.JSONB, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -464,7 +480,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "details",
-            sa.JSON,
+            postgresql.JSONB,
             nullable=True,
             comment="Free-form structured payload describing the action.",
         ),
@@ -474,7 +490,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.PrimaryKeyConstraint("id"),
+        sa.PrimaryKeyConstraint("id", "created_at"),
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         comment="Immutable audit trail — partitioned by RANGE(created_at) monthly.",
         postgresql_partition_by="RANGE(created_at)",
@@ -584,7 +600,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("hypothesis", sa.Text, nullable=True),
-        sa.Column("configuration", sa.JSON, nullable=True),
+        sa.Column("configuration", postgresql.JSONB, nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -619,7 +635,7 @@ def upgrade() -> None:
             nullable=False,
             comment="Relative traffic weight (normalised at assignment time).",
         ),
-        sa.Column("configuration", sa.JSON, nullable=True),
+        sa.Column("configuration", postgresql.JSONB, nullable=True),
         sa.Column(
             "position",
             sa.Integer,
@@ -659,7 +675,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.PrimaryKeyConstraint("id"),
+        sa.PrimaryKeyConstraint("id", "assigned_at"),
         sa.ForeignKeyConstraint(["experiment_id"], ["experiments.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["variant_id"], ["experiment_variants.id"], ondelete="CASCADE"),
         comment="Experiment subject → variant assignments — partitioned by RANGE(assigned_at) monthly.",
@@ -702,8 +718,8 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.Column("metadata", sa.JSON, nullable=True),
-        sa.PrimaryKeyConstraint("id"),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
+        sa.PrimaryKeyConstraint("id", "exposed_at"),
         sa.ForeignKeyConstraint(["experiment_id"], ["experiments.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["variant_id"], ["experiment_variants.id"], ondelete="CASCADE"),
         comment="Variant exposure events — partitioned by RANGE(exposed_at) weekly.",
@@ -724,6 +740,7 @@ def upgrade() -> None:
         "performance_events",
         sa.Column("id", sa.Uuid, server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("content_piece_id", sa.Uuid, nullable=True),
+        sa.Column("workspace_id", sa.Uuid, nullable=True),
         sa.Column("experiment_id", sa.Uuid, nullable=True),
         sa.Column("variant_id", sa.Uuid, nullable=True),
         sa.Column("subject_id", sa.Text, nullable=True),
@@ -747,15 +764,19 @@ def upgrade() -> None:
             nullable=False,
             comment="Numeric value of the metric (count, revenue, …).",
         ),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "received_at",
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.PrimaryKeyConstraint("id"),
-        sa.ForeignKeyConstraint(["content_piece_id"], ["content_pieces.id"], ondelete="SET NULL"),
+        sa.PrimaryKeyConstraint("id", "received_at"),
+        sa.ForeignKeyConstraint(
+            ["content_piece_id", "workspace_id"],
+            ["content_pieces.id", "content_pieces.workspace_id"],
+            ondelete="SET NULL",
+        ),
         sa.ForeignKeyConstraint(["experiment_id"], ["experiments.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["variant_id"], ["experiment_variants.id"], ondelete="SET NULL"),
         comment="Business-metric signals — partitioned by RANGE(received_at) weekly.",
@@ -801,11 +822,11 @@ def upgrade() -> None:
         ),
         sa.Column(
             "variables",
-            sa.JSON,
+            postgresql.JSONB,
             nullable=True,
             comment="Schema describing expected template variables.",
         ),
-        sa.Column("metadata", sa.JSON, nullable=True),
+        sa.Column("metadata", postgresql.JSONB, nullable=True),
         sa.Column(
             "status",
             sa.Enum(
@@ -885,6 +906,20 @@ def upgrade() -> None:
         count=52,
     )
 
+    # DEFAULT partitions as a safety net (audit finding #24): rows outside
+    # the fixed windows (backdated, or beyond the last pre-created partition)
+    # land here instead of failing the INSERT. A scheduled maintenance job
+    # should still create future windows ahead of time and drain DEFAULTs.
+    for _tbl in (
+        "audit_logs",
+        "experiment_assignments",
+        "experiment_exposures",
+        "performance_events",
+    ):
+        op.execute(
+            f"CREATE TABLE IF NOT EXISTS {_tbl}_default PARTITION OF {_tbl} DEFAULT"
+        )
+
     # ------------------------------------------------------------------
     # 6. Row-Level Security
     # ------------------------------------------------------------------
@@ -918,6 +953,10 @@ def upgrade() -> None:
         "experiment_assignments",
         "experiment_exposures",
         "prompt_versions",
+        # Audit finding #23: telemetry was previously unprotected. Rows carry
+        # their own workspace_id (set at ingestion); NULL-workspace legacy
+        # rows are deny-by-default under the direct policy.
+        "performance_events",
     ]
 
     for tbl in workspace_scoped_tables:
@@ -955,6 +994,7 @@ def upgrade() -> None:
         _direct_policy("webhook_configs"),
         _direct_policy("experiments"),
         _direct_policy("prompt_versions"),
+        _direct_policy("performance_events"),
         # Child tables scoped via their parent.
         _parent_policy("content_versions", "content_pieces", "content_piece_id"),
         _parent_policy("review_annotations", "content_pieces", "content_piece_id"),
@@ -991,6 +1031,7 @@ def downgrade() -> None:
         "experiment_assignments_workspace_isolation",
         "experiment_exposures_workspace_isolation",
         "prompt_versions_workspace_isolation",
+        "performance_events_workspace_isolation",
     ]
     for tbl, pol in zip(
         [
@@ -1026,6 +1067,13 @@ def downgrade() -> None:
     )
     _drop_weekly_partitions(op, "experiment_exposures", count=52, prefix="experiment_exposures")
     _drop_weekly_partitions(op, "performance_events", count=52, prefix="performance_events")
+    for _tbl in (
+        "audit_logs",
+        "experiment_assignments",
+        "experiment_exposures",
+        "performance_events",
+    ):
+        op.execute(f"DROP TABLE IF EXISTS {_tbl}_default")
 
     # 3. Drop tables in reverse dependency order.
     tables_in_drop_order = [

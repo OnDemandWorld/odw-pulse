@@ -1,0 +1,31 @@
+# Shared bulk-job payload storage (audit finding #7).
+#
+# pulse-api writes uploaded CSVs to /tmp/pulse_bulk_uploads and pulse-worker
+# reads them there; the worker writes results to /tmp/pulse_bulk_outputs and
+# the API serves downloads from there. Both pods (and all API replicas) must
+# see the same filesystem, so these PVCs require a ReadWriteMany-capable
+# StorageClass (e.g. NFS, CephFS, EFS, Filestore). If your cluster default
+# does not support RWX, set storageClassName explicitly below.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pulse-bulk-uploads
+  namespace: pulse
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pulse-bulk-outputs
+  namespace: pulse
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi

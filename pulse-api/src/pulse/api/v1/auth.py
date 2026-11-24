@@ -397,6 +397,18 @@ async def impersonate(
             detail="Target workspace does not exist",
         )
 
+    # Audit finding #11: until cross-workspace membership exists, a caller
+    # must actually belong to the target workspace. Previously any
+    # self-registered owner could mint an owner token for ANY workspace.
+    caller = (
+        await db.execute(select(User).where(User.id == current_user.user_id))
+    ).scalar_one_or_none()
+    if caller is None or caller.workspace_id != body.target_workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Impersonation requires membership of the target workspace",
+        )
+
     db.add(
         AuditLog(
             id=uuid.uuid4(),

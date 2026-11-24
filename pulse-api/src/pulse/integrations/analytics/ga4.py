@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import structlog
 
 from pulse.config import get_settings
 from pulse.integrations.analytics.base import AnalyticsConnector
+
+logger = structlog.get_logger()
 
 
 class GA4Connector(AnalyticsConnector):
@@ -60,7 +63,10 @@ class GA4Connector(AnalyticsConnector):
         if not self._measurement_id or not self._api_secret:
             return  # silently skip when not configured
         payload = self.normalize(event)
-        await self._http.post(self._collect_url, json=payload)
+        response = await self._http.post(self._collect_url, json=payload)
+        if response.status_code >= 400:
+            # Audit finding #84: failed deliveries must be visible.
+            logger.warning("ga4 delivery failed", status_code=response.status_code)
 
     # ------------------------------------------------------------------
     # Lifecycle

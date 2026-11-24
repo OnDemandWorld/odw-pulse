@@ -39,8 +39,10 @@ if config.config_file_name is not None:
 # Expose the ``MetaData`` that Alembic should diff against.
 target_metadata = metadata
 
-# Override the sqlalchemy.url with the runtime settings value.
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Override the sqlalchemy.url with the runtime settings value. Escape '%'
+# for ConfigParser interpolation (audit finding #65 — percent-encoded
+# passwords like p%40ss otherwise raise InterpolationSyntaxError).
+config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

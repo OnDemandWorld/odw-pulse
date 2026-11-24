@@ -12,15 +12,18 @@ import asyncio
 import csv
 import logging
 import tempfile
+import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pulse.api.schemas.bulk_job import BulkJobConfig
 from pulse.generation.models import GenerationRequest
-from pulse.models.bulk_job import BulkJobStatus
+from pulse.models.bulk_job import BulkJob, BulkJobStatus
 from pulse.services.bulk_job_service import BulkJobService
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,11 @@ PROGRESS_BATCH = 10
 
 # How often (seconds) to poll for pause/cancel while waiting.
 _PAUSE_POLL_INTERVAL = 2.0
+
+# Max seconds between updated_at heartbeats (audit finding #42). Must stay
+# well below maintenance.STALE_AFTER (10 min) even when individual LLM rows
+# are slow, so the reaper never fails a live job.
+_HEARTBEAT_INTERVAL = 30.0
 
 # Shared storage directories.
 _UPLOAD_DIR = Path(tempfile.gettempdir()) / "pulse_bulk_uploads"
@@ -46,8 +54,14 @@ _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 async def process_bulk_job(
     job_id: str,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
-) -> None:
+) -> str:
     """Process a bulk job end-to-end.
+
+    Returns an outcome string for the stream consumer (audit finding #9):
+    ``"processed"`` (job reached a terminal state — safe to ack),
+    ``"terminal"`` (job was already finished — safe to ack), or
+    ``"active"`` (another consumer owns the RUNNING/PAUSED job — the
+    message must NOT be acked by this consumer).
 
     1. Load the job from the database.
     2. Transition status to RUNNING.
@@ -70,19 +84,27 @@ async def process_bulk_job(
     jid = uuid.UUID(job_id)
 
     async with session_factory() as db:
-        job = await svc.get_job_unscoped(db, jid)
-
-        # At-least-once delivery guard: a message can arrive twice (retry,
-        # requeue after a crash).  Only PENDING jobs still need processing.
-        if job.status != BulkJobStatus.PENDING:
+        # Atomic claim (audit finding #8): the conditional PENDING->RUNNING
+        # UPDATE guarantees only one worker processes a job even when the
+        # stream delivers it twice (reaper requeue, XAUTOCLAIM).
+        job = await svc.claim_pending_job(db, jid)
+        if job is None:
+            existing = await svc.get_job_unscoped(db, jid)
+            if existing.status in (BulkJobStatus.RUNNING, BulkJobStatus.PAUSED):
+                # Another consumer may still be working on it. Do not ack
+                # its message (audit finding #9) — report "active".
+                logger.info(
+                    "Job %s is %s — owned by another consumer; leaving pending",
+                    job_id,
+                    existing.status.value,
+                )
+                return "active"
             logger.info(
                 "Job %s is %s — nothing to do (duplicate delivery?)",
                 job_id,
-                job.status.value,
+                existing.status.value,
             )
-            return
-
-        await svc.update_status(db, jid, job.workspace_id, BulkJobStatus.RUNNING)
+            return "terminal"
 
         config_dict = svc.extract_config(job)
         config = BulkJobConfig(**config_dict)
@@ -91,9 +113,10 @@ async def process_bulk_job(
         if not input_path or not Path(input_path).exists():
             await svc.update_status(db, jid, job.workspace_id, BulkJobStatus.FAILED)
             logger.error("Input file missing for job %s: %s", job_id, input_path)
-            return
+            return "processed"
 
-        rows = _read_input_csv(input_path)
+        # Off-loop file I/O (audit finding #90).
+        rows = await asyncio.to_thread(_read_input_csv, input_path)
         await svc.update_status(
             db, jid, job.workspace_id, BulkJobStatus.RUNNING, progress=0,
         )
@@ -103,7 +126,7 @@ async def process_bulk_job(
 
         if not rows:
             await svc.update_status(db, jid, job.workspace_id, BulkJobStatus.SUCCEEDED)
-            return
+            return "processed"
 
         # Lazily import orchestrator to avoid heavy deps at module load.
         from pulse.api.v1.generate import get_orchestrator
@@ -112,6 +135,7 @@ async def process_bulk_job(
         results: list[dict[str, Any]] = []
         errors: dict[str, Any] = {}
         unreported = 0  # Rows processed since the last progress DB write.
+        last_heartbeat = time.monotonic()
 
         for idx, row in enumerate(rows):
             # ---- pause / cancel gate ----
@@ -127,7 +151,9 @@ async def process_bulk_job(
             # ---- generate ----
             try:
                 gen_req = _build_generation_request(row, config)
-                gen_result = await orchestrator.generate(gen_req)
+                gen_result = await orchestrator.generate(
+                    gen_req, workspace_id=job.workspace_id
+                )
                 results.append(
                     {
                         **row,
@@ -143,12 +169,17 @@ async def process_bulk_job(
 
             # ---- progress ----
             unreported += 1
-            if unreported >= PROGRESS_BATCH or idx == len(rows) - 1:
+            if (
+                unreported >= PROGRESS_BATCH
+                or idx == len(rows) - 1
+                or time.monotonic() - last_heartbeat >= _HEARTBEAT_INTERVAL
+            ):
                 await svc.increment_progress(db, jid, job.workspace_id, count=unreported)
                 unreported = 0
+                last_heartbeat = time.monotonic()
 
         # ---- write output ----
-        output_path = _write_output_csv(jid, results)
+        output_path = await asyncio.to_thread(_write_output_csv, jid, results)
 
         final_status = (
             BulkJobStatus.CANCELLED
@@ -159,9 +190,22 @@ async def process_bulk_job(
             else BulkJobStatus.FAILED
         )
 
-        job.status = final_status
-        job.output_file = str(output_path)
-        job.errors = errors or None
+        # Conditional final write (audit findings #26/#42): only apply the
+        # terminal status while the job is still RUNNING/PAUSED, so a cancel
+        # or reaper failure committed meanwhile is never overwritten.
+        await db.execute(
+            update(BulkJob)
+            .where(
+                BulkJob.id == jid,
+                BulkJob.status.in_((BulkJobStatus.RUNNING, BulkJobStatus.PAUSED)),
+            )
+            .values(
+                status=final_status,
+                output_file=str(output_path),
+                errors=errors or None,
+                updated_at=datetime.now(UTC),
+            )
+        )
         await db.commit()
 
         logger.info(
@@ -171,6 +215,7 @@ async def process_bulk_job(
             job.progress,
             job.total,
         )
+        return "processed"
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +233,7 @@ async def _wait_for_resume(
 
     Returns ``True`` if the job was cancelled, ``False`` if it was resumed.
     """
+    last_heartbeat = time.monotonic()
     while True:
         await asyncio.sleep(_PAUSE_POLL_INTERVAL)
         fresh = await svc.get_job(db, job_id, workspace_id)
@@ -195,6 +241,12 @@ async def _wait_for_resume(
             return False
         if fresh.status == BulkJobStatus.CANCELLED:
             return True
+        # Heartbeat while paused (audit findings #42/#50): a live pause must
+        # keep updated_at fresh so the reaper can distinguish it from a pause
+        # orphaned by a crashed worker.
+        if time.monotonic() - last_heartbeat >= _HEARTBEAT_INTERVAL:
+            await svc.increment_progress(db, job_id, workspace_id, count=0)
+            last_heartbeat = time.monotonic()
 
 
 def _read_input_csv(path: str) -> list[dict[str, str]]:

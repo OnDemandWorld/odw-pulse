@@ -13,10 +13,12 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from pulse.api.deps import CurrentUser
-from pulse.generation.models import GenerationRequest, GenerationResult
+from pulse.db.session import get_session_factory
+from pulse.generation.models import GenerationError, GenerationRequest, GenerationResult
 from pulse.generation.orchestrator import GenerationOrchestrator
 from pulse.llm import FallbackRouter, get_registry
 from pulse.llm.fallback_router import CircuitBreakerConfig
+from pulse.llm.registry import bootstrap_providers_from_settings
 
 router = APIRouter(tags=["generation"])
 
@@ -31,17 +33,27 @@ def get_orchestrator() -> GenerationOrchestrator:
         # Set up fallback router with default providers
         registry = get_registry()
 
-        # Try to get providers from registry, or create mock ones for now
+        # Populate the registry from configuration (OPENAI_API_KEY,
+        # ANTHROPIC_API_KEY, OLLAMA_BASE_URL) on first use. Covers both the
+        # API and the worker, which imports this factory.
+        if not registry.list_providers():
+            bootstrap_providers_from_settings()
+
         primary = None
         secondary = None
 
-        providers = registry.list_providers()
+        # Explicit preference order (audit finding #60) — never depend on
+        # dict insertion order for primary/secondary selection.
+        preference = ["openai", "anthropic", "ollama"]
+        providers = [p for p in preference if p in registry.list_providers()]
+        providers += [p for p in registry.list_providers() if p not in preference]
         if len(providers) >= 2:
             primary = registry.get(providers[0])
             secondary = registry.get(providers[1])
         elif len(providers) == 1:
             primary = registry.get(providers[0])
-            # Use same provider as secondary for now
+            # Single provider: the router fails fast (CircuitOpenError)
+            # while open instead of hammering the same dead provider.
             secondary = primary
         else:
             # No providers registered — this will fail at generation time
@@ -56,7 +68,12 @@ def get_orchestrator() -> GenerationOrchestrator:
             config=CircuitBreakerConfig(),
         )
 
-        _orchestrator = GenerationOrchestrator(fallback_router=fallback_router)
+        # Audit finding #20: wire the DB session factory so market-profile
+        # enrichment and brand-voice lookup actually run in production.
+        _orchestrator = GenerationOrchestrator(
+            fallback_router=fallback_router,
+            db_session_factory=get_session_factory(),
+        )
 
     return _orchestrator
 
@@ -78,8 +95,15 @@ async def generate(request: GenerationRequest, current_user: CurrentUser) -> Gen
     _ = current_user  # Authentication enforced by the dependency itself.
     try:
         orchestrator = get_orchestrator()
-        result = await orchestrator.generate(request)
+        result = await orchestrator.generate(
+            request, workspace_id=current_user.workspace_id
+        )
         return result
+    except GenerationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Generation failed: upstream LLM provider error",
+        ) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -106,7 +130,9 @@ async def generate_stream(
     _ = current_user  # Authentication enforced by the dependency itself.
     try:
         orchestrator = get_orchestrator()
-        result = await orchestrator.generate(request)
+        result = await orchestrator.generate(
+            request, workspace_id=current_user.workspace_id
+        )
 
         # Convert to SSE format (stub — single event)
         async def event_generator() -> Any:
@@ -128,6 +154,11 @@ async def generate_stream(
                 "X-Accel-Buffering": "no",
             },
         )
+    except GenerationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Streaming generation failed: upstream LLM provider error",
+        ) from e
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+class GenerationError(RuntimeError):
+    """Raised when the LLM provider fails to produce content.
+
+    Carries the provider-reported HTTP status code (when available) so
+    callers can distinguish upstream failures from internal errors.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GenerationRequest(BaseModel):
@@ -35,6 +48,25 @@ class GenerationRequest(BaseModel):
     cultural_overrides: dict[str, Any] = Field(
         default_factory=dict, description="Cultural dimension overrides"
     )
+
+    @field_validator("content_type")
+    @classmethod
+    def _safe_content_type(cls, v: str) -> str:
+        # Audit finding #13: this value is interpolated into the system
+        # prompt; reject newlines/control characters and injection payloads.
+        if not re.fullmatch(r"[A-Za-z0-9_\- ]{1,64}", v):
+            raise ValueError(
+                "content_type must be 1-64 chars of letters, digits, '_', '-' or space"
+            )
+        return v
+
+    @field_validator("target_market")
+    @classmethod
+    def _safe_target_market(cls, v: str) -> str:
+        # Audit finding #13: locale-shaped codes only (e.g. en-US, zh-Hant-TW).
+        if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*", v):
+            raise ValueError("target_market must be a locale code like 'en-US'")
+        return v
 
 
 class GenerationResult(BaseModel):

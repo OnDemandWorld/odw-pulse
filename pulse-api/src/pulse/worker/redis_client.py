@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from pulse.config import get_settings
+from pulse.core.redis_kv import redact_url
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,10 @@ class RedisClient:
     def __init__(self, redis_url: str | None = None) -> None:
         self._redis_url = redis_url or get_settings().redis_url
         self._redis: Any = None
+        # XAUTOCLAIM cursor persisted across sweeps (audit finding #88):
+        # restarting at 0-0 with count=10 never reached stale entries behind
+        # a fresh PEL head.
+        self._claim_cursor = "0-0"
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -36,7 +41,7 @@ class RedisClient:
             self._redis_url,
             decode_responses=True,
         )
-        logger.info("Connected to Redis at %s", self._redis_url)
+        logger.info("Connected to Redis at %s", redact_url(self._redis_url))
 
     async def disconnect(self) -> None:
         """Close the async Redis connection (safe to call when broken)."""
@@ -50,7 +55,10 @@ class RedisClient:
         """Append a job ID to a Redis Stream for worker consumption."""
         if self._redis is None:
             raise RuntimeError("Redis client not connected; call connect() first")
-        await self._redis.xadd(stream, {"job_id": job_id})
+        # Bounded stream (audit finding #49): acked entries are never removed
+        # by XACK, so without MAXLEN the stream grows forever and eventually
+        # OOMs the Redis instance that also holds rate-limit/revocation state.
+        await self._redis.xadd(stream, {"job_id": job_id}, maxlen=10_000, approximate=True)
         logger.info("Pushed job %s to stream %s", job_id, stream)
 
     async def ensure_group(
@@ -110,32 +118,77 @@ class RedisClient:
         """
         if self._redis is None:
             raise RuntimeError("Redis client not connected; call connect() first")
-        _next_start, claimed, _deleted = await self._redis.xautoclaim(
+        next_start, claimed, _deleted = await self._redis.xautoclaim(
             name=stream,
             groupname=group,
             consumername=consumer,
             min_idle_time=min_idle_ms,
-            start_id="0-0",
+            start_id=self._claim_cursor,
             count=count,
         )
+        # Redis returns 0-0 when the scan wrapped around; keep the cursor
+        # otherwise so the next sweep continues past the fresh PEL head.
+        self._claim_cursor = next_start if next_start != "0-0" else "0-0"
         return [(msg_id, fields) for msg_id, fields in claimed]
+
+    async def extend_claim(
+        self,
+        message_id: str,
+        stream: str = BULK_JOB_STREAM,
+        group: str = CONSUMER_GROUP,
+        consumer: str = "worker-1",
+    ) -> None:
+        """Reset a pending message's idle time (processing heartbeat).
+
+        Called periodically while a job is being processed so another
+        consumer's XAUTOCLAIM cannot steal the in-flight message (audit
+        finding #9). XCLAIM with JUSTID only refreshes ownership/idle time.
+        """
+        if self._redis is None:
+            raise RuntimeError("Redis client not connected; call connect() first")
+        await self._redis.xclaim(
+            name=stream,
+            groupname=group,
+            consumername=consumer,
+            min_idle_time=0,
+            message_ids=[message_id],
+            justid=True,
+        )
 
     async def pending_delivery_counts(
         self,
         stream: str = BULK_JOB_STREAM,
         group: str = CONSUMER_GROUP,
     ) -> dict[str, int]:
-        """Return ``{message_id: times_delivered}`` for all pending messages."""
+        """Return ``{message_id: times_delivered}`` for ALL pending messages.
+
+        Paginates XPENDING (audit finding #87): a single count=1000 call
+        let deep-PEL entries default to attempts=1 and evade dead-lettering.
+        """
         if self._redis is None:
             raise RuntimeError("Redis client not connected; call connect() first")
-        entries: list[Any] = await self._redis.xpending_range(
-            name=stream,
-            groupname=group,
-            min="-",
-            max="+",
-            count=1000,
-        )
-        return {entry["message_id"]: int(entry["times_delivered"]) for entry in entries}
+        counts: dict[str, int] = {}
+        start = "-"
+        while True:
+            entries: list[Any] = await self._redis.xpending_range(
+                name=stream,
+                groupname=group,
+                min=start,
+                max="+",
+                count=1000,
+            )
+            if not entries:
+                break
+            new = 0
+            for entry in entries:
+                mid = entry["message_id"]
+                if mid not in counts:
+                    counts[mid] = int(entry["times_delivered"])
+                    new += 1
+            if new == 0 or len(entries) < 1000:
+                break
+            start = entries[-1]["message_id"]
+        return counts
 
     async def ack(
         self,

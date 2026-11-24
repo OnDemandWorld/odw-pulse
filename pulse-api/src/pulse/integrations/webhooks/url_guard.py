@@ -12,14 +12,17 @@ The guard rejects:
 * hostnames that resolve (even partially) to loopback, private, link-local,
   multicast, reserved, or unspecified addresses.
 
-This is defence-in-depth: DNS can be re-bound between validation and
-request time, so a determined attacker with control of DNS could still
-bypass it.  For production environments the robust answer is egress
-filtering at the network layer; see PLAN.md.
+Audit finding #45: validation returns the resolved addresses and the
+dispatcher pins one of them for the actual TCP connection (see
+``_PinnedBackend``), closing the DNS-rebinding window between validation
+and request time.  Audit finding #46: resolution runs off the event loop.
+For production environments egress filtering at the network layer remains
+recommended defence-in-depth; see PLAN.md.
 """
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -46,8 +49,11 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-def validate_webhook_url(url: str) -> None:
+async def validate_webhook_url(url: str) -> list[str]:
     """Validate *url* as a safe webhook destination.
+
+    Returns the validated IP addresses so the caller can pin the
+    connection to one of them (audit finding #45).
 
     Raises:
         WebhookURLBlockedError: When the URL is malformed or points at a
@@ -68,18 +74,25 @@ def validate_webhook_url(url: str) -> None:
         raise WebhookURLBlockedError("Webhook URL has no host")
 
     # Resolve the host and inspect every address it maps to.  For IP
-    # literals getaddrinfo simply returns the literal itself.
+    # literals getaddrinfo simply returns the literal itself.  Run in a
+    # worker thread: a slow attacker-controlled resolver must not block
+    # the event loop (audit finding #46).
     try:
-        addr_info = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        addr_info = await asyncio.to_thread(
+            socket.getaddrinfo, host, None, proto=socket.IPPROTO_TCP
+        )
     except socket.gaierror as exc:
         raise WebhookURLBlockedError(f"Cannot resolve webhook host '{host}'") from exc
 
+    validated: list[str] = []
     for _family, _type, _proto, _canonname, sockaddr in addr_info:
         ip = ipaddress.ip_address(sockaddr[0])
         if _is_blocked_ip(ip):
             raise WebhookURLBlockedError(
                 f"Webhook host '{host}' resolves to a blocked address ({ip})"
             )
+        validated.append(str(ip))
+    return validated
 
 
 __all__ = ["WebhookURLBlockedError", "validate_webhook_url"]

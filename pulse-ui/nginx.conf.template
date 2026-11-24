@@ -2,6 +2,15 @@ server {
     listen 80;
     server_name _;
 
+    # Match the API's 5 MiB bulk-CSV limit (audit finding #32); nginx's
+    # default 1m would reject uploads the backend accepts.
+    client_max_body_size 6m;
+
+    # Defense-in-depth for the SPA (audit findings #68/#31).
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
     root /usr/share/nginx/html;
     index index.html;
 
@@ -15,9 +24,15 @@ server {
     location /api/ {
         proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
+        # Synchronous /generate can legitimately exceed nginx's 60s default
+        # (LLM timeouts up to 120s + fallback) — audit finding #33.
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Overwrite (not append) XFF so a client-supplied spoofed entry
+        # cannot reach the API's rate limiter (audit finding #52).
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }

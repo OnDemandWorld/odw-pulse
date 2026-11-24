@@ -1,9 +1,17 @@
+# Redis for rate limiting, token revocation, and the bulk-job stream.
+#
+# Audit finding #40: previously an ephemeral, unauthenticated Deployment —
+# a pod restart wiped revocation markers (re-activating logged-out JWTs)
+# and stream/PEL state. Now a StatefulSet with a PVC + AOF persistence,
+# requirepass authentication, and a NetworkPolicy limiting access to the
+# Pulse app pods.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: redis
   namespace: pulse
 spec:
+  serviceName: redis
   replicas: 1
   selector:
     matchLabels:
@@ -16,16 +24,29 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - exec redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes --dir /data
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-secrets
+                  key: REDIS_PASSWORD
           ports:
             - containerPort: 6379
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
           readinessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
             initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
             initialDelaySeconds: 10
             periodSeconds: 20
           resources:
@@ -35,6 +56,14 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
 ---
 apiVersion: v1
 kind: Service
@@ -47,3 +76,26 @@ spec:
   ports:
     - port: 6379
       targetPort: 6379
+---
+# Only the Pulse app pods may talk to Redis (audit finding #40).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-access
+  namespace: pulse
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: ["pulse-api", "pulse-worker", "pulse-scheduler"]
+      ports:
+        - protocol: TCP
+          port: 6379
