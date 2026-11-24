@@ -48,6 +48,7 @@ _WORKSPACE_TABLES = [
     "experiment_assignments",
     "experiment_exposures",
     "prompt_versions",
+    "performance_events",
 ]
 
 

@@ -352,3 +352,52 @@ async def test_cannot_resume_non_paused_job(
     # Try to resume (job is pending, not paused)
     response = await authorized_client.post(f"/api/v1/bulk-jobs/{job_id}/resume")
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Regression: audit #26/#27 — conditional transitions + atomic progress
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_state_transitions_are_conditional(
+    async_session: AsyncSession, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    from fastapi import HTTPException
+
+    svc = BulkJobService()
+    job = await svc.create_job(
+        db=async_session, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=1
+    )
+
+    # pause requires RUNNING — PENDING must be refused.
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.pause(async_session, job.id, TEST_WORKSPACE_ID)
+    assert exc_info.value.status_code == 400
+
+    await svc.update_status(async_session, job.id, TEST_WORKSPACE_ID, BulkJobStatus.RUNNING)
+    paused = await svc.pause(async_session, job.id, TEST_WORKSPACE_ID)
+    assert paused.status == BulkJobStatus.PAUSED
+    resumed = await svc.resume(async_session, job.id, TEST_WORKSPACE_ID)
+    assert resumed.status == BulkJobStatus.RUNNING
+    cancelled = await svc.cancel(async_session, job.id, TEST_WORKSPACE_ID)
+    assert cancelled.status == BulkJobStatus.CANCELLED
+
+    # A second cancel must not pass a stale Python-side check.
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.cancel(async_session, job.id, TEST_WORKSPACE_ID)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_increment_progress_accumulates_atomically(
+    async_session: AsyncSession, test_workspace_and_user: tuple[Any, Any]
+) -> None:
+    svc = BulkJobService()
+    job = await svc.create_job(
+        db=async_session, workspace_id=TEST_WORKSPACE_ID, config=BulkJobConfig(), total=10
+    )
+    await svc.increment_progress(async_session, job.id, TEST_WORKSPACE_ID, count=3)
+    await svc.increment_progress(async_session, job.id, TEST_WORKSPACE_ID, count=4)
+    fresh = await svc.get_job(async_session, job.id, TEST_WORKSPACE_ID)
+    assert fresh.progress == 7

@@ -317,7 +317,9 @@
     "title": "performance_events has RLS enabled nowhere and no policy, so tenant telemetry stays unprotected even after RLS becomes binding",
     "root_cause": "workspace_scoped_tables lists 16 tables but omits performance_events, which holds per-tenant business metrics linked via experiment_id/content_piece_id. Migration 002 FORCEs RLS on the same list, so performance_events never gets ENABLE ROW LEVEL SECURITY nor a policy.",
     "suggested_fix": "Enable RLS on performance_events and add a parent-style policy (EXISTS over experiments/content_pieces matching pulse.workspace_id), or add a workspace_id column with a direct policy; include it in 002's FORCE list.",
-    "failure_scenario": "After the non-owner role rollout, a session scoped to workspace A can SELECT/UPDATE/DELETE performance_events rows belonging to workspace B's experiments because no policy restricts the table while all sibling tables are restricted."
+    "failure_scenario": "After the non-owner role rollout, a session scoped to workspace A can SELECT/UPDATE/DELETE performance_events rows belonging to workspace B's experiments because no policy restricts the table while all sibling tables are restricted.",
+    "status": "fixed",
+    "verification_notes": "123 tests pass, ruff/mypy clean. performance_events added to 001 RLS enable+direct policy lists, downgrade policy list, and 002 FORCE list (workspace_id column added in #3, populated in #12). Drift-guard test: test_migration_rls_and_default_partitions_cover_telemetry."
   },
   {
     "id": 24,
@@ -329,7 +331,9 @@
     "title": "Fixed partition windows with no DEFAULT partition and no partition-maintenance job: inserts start failing when windows expire",
     "root_cause": "audit_logs/experiment_assignments get 24 monthly partitions (Jan 2026–Dec 2027); experiment_exposures/performance_events get 52 weekly partitions ending 2027-01-04. No DEFAULT partition is created and nothing in the codebase creates future partitions (worker/maintenance.py only reaps bulk jobs). RANGE partitioned tables reject rows outside all partitions.",
     "suggested_fix": "Add a DEFAULT partition as a safety net plus a scheduled job that creates upcoming monthly/weekly partitions ahead of time (or pg_partman). Also handle backdated rows (created_at < 2026-01-01) which fail today.",
-    "failure_scenario": "From 2027-01-04 (~6 weeks after this audit), every INSERT into performance_events/experiment_exposures fails with 'no partition of relation found for row', breaking event ingestion; from 2028-01-01 audit_logs inserts fail, breaking auth flows that write AuditLog rows."
+    "failure_scenario": "From 2027-01-04 (~6 weeks after this audit), every INSERT into performance_events/experiment_exposures fails with 'no partition of relation found for row', breaking event ingestion; from 2028-01-01 audit_logs inserts fail, breaking auth flows that write AuditLog rows.",
+    "status": "fixed",
+    "verification_notes": "123 tests pass. DEFAULT partitions added for all 4 RANGE-partitioned tables (upgrade + downgrade): out-of-window/backdated rows no longer fail INSERTs. Same drift-guard test. Future-window maintenance job still recommended (documented in migration comment)."
   },
   {
     "id": 25,
@@ -341,7 +345,9 @@
     "title": "Admin-session fallback to DATABASE_URL silently breaks login/registration once RLS is enforced as migration 002 intends",
     "root_cause": "get_admin_session_factory falls back to s.database_url when database_admin_url is empty (the docker-compose default). Migration 002 FORCEs RLS and documents switching DATABASE_URL to the non-owner pulse_api role; pre-auth login/registration queries run without any pulse.workspace_id setting, so the users policy denies all rows. Even pointing DATABASE_ADMIN_URL at the table owner is insufficient because FORCE ROW LEVEL SECURITY binds the owner too — only a superuser/BYPASSRLS role bypasses it. The same trap empties worker/scheduler unscoped queries under the scoped role.",
     "suggested_fix": "Fail fast at startup when RLS is enforced and database_admin_url is unset or equals database_url; document that the admin role needs BYPASSRLS; give worker/scheduler a trusted role or set workspace context per job.",
-    "failure_scenario": "Operator follows 002's rollout, leaves DATABASE_ADMIN_URL empty (compose default). POST /auth/login finds zero users for valid credentials (RLS deny-by-default) -> universal 401; registration INSERT rejected by WITH CHECK; the bulk-job reaper finds zero stale jobs."
+    "failure_scenario": "Operator follows 002's rollout, leaves DATABASE_ADMIN_URL empty (compose default). POST /auth/login finds zero users for valid credentials (RLS deny-by-default) -> universal 401; registration INSERT rejected by WITH CHECK; the bulk-job reaper finds zero stale jobs.",
+    "status": "fixed",
+    "verification_notes": "123 tests pass. New PULSE_RLS_ENFORCED setting (default false); get_admin_session_factory raises RuntimeError when enforced and DATABASE_ADMIN_URL unset/equal to DATABASE_URL. .env.example documents it. Regression test: test_admin_factory_requires_distinct_url_when_rls_enforced."
   },
   {
     "id": 26,
@@ -353,7 +359,9 @@
     "title": "Job state transitions are check-then-act without row locking; worker's final commit overwrites CANCELLED with SUCCEEDED",
     "root_cause": "cancel()/pause()/resume()/update_status() read the job, validate status in Python, and commit without SELECT ... FOR UPDATE or a conditional UPDATE ... WHERE status = <expected>. The worker (worker/tasks.py:153-165) likewise decides final_status from a read and then unconditionally sets job.status, so a cancel committed between the worker's last status read and its final commit is silently overwritten. Related: #8, #42.",
     "suggested_fix": "Use atomic conditional updates (UPDATE bulk_jobs SET status=:new WHERE id=:id AND status IN (:allowed) RETURNING *) or SELECT FOR UPDATE inside the transition, and make the worker's final write conditional on status not being CANCELLED.",
-    "failure_scenario": "User cancels a job while the worker is writing the output CSV. Worker commits status=SUCCEEDED over CANCELLED; the UI shows the cancelled job as succeeded and its output is downloadable. Two concurrent pause/cancel requests can also both pass their status checks."
+    "failure_scenario": "User cancels a job while the worker is writing the output CSV. Worker commits status=SUCCEEDED over CANCELLED; the UI shows the cancelled job as succeeded and its output is downloadable. Two concurrent pause/cancel requests can also both pass their status checks.",
+    "status": "fixed",
+    "verification_notes": "123 tests pass. pause/resume/cancel use atomic conditional UPDATE (_transition_status with allowed-status WHERE); worker final write conditional on RUNNING/PAUSED so CANCELLED/reaped states are never overwritten. Regression test: test_state_transitions_are_conditional."
   },
   {
     "id": 27,
@@ -365,7 +373,9 @@
     "title": "increment_progress is a read-modify-write race; concurrent workers lose progress updates",
     "root_cause": "progress is computed in Python ((job.progress or 0) + count) and written back, not via an atomic SQL increment. Combined with the non-atomic job claim (#8) and XAUTOCLAIM redelivery (#9), two workers processing the same job interleave increments and lose updates.",
     "suggested_fix": "Increment atomically: UPDATE bulk_jobs SET progress = progress + :count, updated_at=now() WHERE id=:id.",
-    "failure_scenario": "Duplicate delivery (see #8/#9): two workers both generate rows and call increment_progress concurrently; final progress < total, job appears stuck below 100% even after completion."
+    "failure_scenario": "Duplicate delivery (see #8/#9): two workers both generate rows and call increment_progress concurrently; final progress < total, job appears stuck below 100% even after completion.",
+    "status": "fixed",
+    "verification_notes": "123 tests pass. increment_progress now atomic SQL UPDATE progress = coalesce(progress,0) + count. Regression test: test_increment_progress_accumulates_atomically."
   },
   {
     "id": 28,

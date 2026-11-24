@@ -104,11 +104,11 @@ The repo presents as "fully implemented, all checks pass," but the audit found t
 ### Database / migrations / services
 - [x] **#21 — Migration enum `bulk_job_status` omits 'paused' that the ORM writes** (`001_initial_schema.py:52-60`) — pause() 500s on PostgreSQL. Add the enum value.
 - [x] **#22 — ~18 JSONB model columns created as plain JSON (schema drift)** (`001_initial_schema.py:113`) — use postgresql.JSONB; blocks future JSONB operators/GIN.
-- [ ] **#23 — performance_events excluded from RLS enable/policy/FORCE lists** (`001_initial_schema.py:904-921`) — unprotected tenant telemetry once RLS binds.
-- [ ] **#24 — Fixed partition windows, no DEFAULT partition, no maintenance job** (`001_initial_schema.py:852-886`) — weekly-partition inserts start failing **2027-01-04 (~6 weeks away)**; backdated rows fail today.
-- [ ] **#25 — Admin-session fallback to DATABASE_URL breaks login/register once RLS is enforced** (`db/session.py:112-131`) — fail fast; admin role needs BYPASSRLS (FORCE binds owners too).
-- [ ] **#26 — cancel/pause/resume are check-then-act; worker's final commit overwrites CANCELLED** (`services/bulk_job_service.py:185-206`) — atomic conditional transitions.
-- [ ] **#27 — increment_progress read-modify-write race loses updates** (`services/bulk_job_service.py:132-145`) — atomic SQL increment.
+- [x] **#23 — performance_events excluded from RLS enable/policy/FORCE lists** (`001_initial_schema.py:904-921`) — unprotected tenant telemetry once RLS binds.
+- [x] **#24 — Fixed partition windows, no DEFAULT partition, no maintenance job** (`001_initial_schema.py:852-886`) — weekly-partition inserts start failing **2027-01-04 (~6 weeks away)**; backdated rows fail today.
+- [x] **#25 — Admin-session fallback to DATABASE_URL breaks login/register once RLS is enforced** (`db/session.py:112-131`) — fail fast; admin role needs BYPASSRLS (FORCE binds owners too).
+- [x] **#26 — cancel/pause/resume are check-then-act; worker's final commit overwrites CANCELLED** (`services/bulk_job_service.py:185-206`) — atomic conditional transitions.
+- [x] **#27 — increment_progress read-modify-write race loses updates** (`services/bulk_job_service.py:132-145`) — atomic SQL increment.
 - [ ] **#28 — promote_winner mutates JSONB dict in place; winner info never persisted** (`services/experiment_service.py:429-436`) — assign a copy or MutableDict.
 - [ ] **#29 — Unbounded event batch ingestion + full-table event load in results (OOM)** (`services/experiment_service.py:350-356`) — SQL aggregation; cap batch size. Amplifiable via #12.
 

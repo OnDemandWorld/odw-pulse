@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # cannot read users without a workspace context, so auth needs a role
     # that can.  Defaults to database_url when unset.
     database_admin_url: str | None = None
+    # Set true once migration 002's RLS rollout is live (non-owner app role).
+    # When true, a distinct DATABASE_ADMIN_URL pointing at a BYPASSRLS role
+    # is required — see get_admin_session_factory (audit finding #25).
+    rls_enforced: bool = False
     database_pool_size: int = 10
     database_max_overflow: int = 20
 

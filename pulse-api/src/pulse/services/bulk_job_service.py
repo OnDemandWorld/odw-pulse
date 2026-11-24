@@ -169,12 +169,60 @@ class BulkJobService:
         workspace_id: uuid.UUID,
         count: int = 1,
     ) -> BulkJob:
-        """Increment the progress counter by *count*."""
-        job = await self.get_job(db, job_id, workspace_id)
-        job.progress = (job.progress or 0) + count
-        job.updated_at = datetime.now(UTC)
+        """Increment the progress counter by *count* atomically (audit #27)."""
+        result = await db.execute(
+            update(BulkJob)
+            .where(BulkJob.id == job_id, BulkJob.workspace_id == workspace_id)
+            .values(
+                progress=func.coalesce(BulkJob.progress, 0) + count,
+                updated_at=datetime.now(UTC),
+            )
+            .returning(BulkJob.id)
+        )
+        claimed = result.first()
         await db.commit()
-        await db.refresh(job)
+        if claimed is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Bulk job not found",
+            )
+        return await self.get_job(db, job_id, workspace_id)
+
+    async def _transition_status(
+        self,
+        db: AsyncSession,
+        job_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        new_status: BulkJobStatus,
+        allowed: tuple[BulkJobStatus, ...],
+    ) -> BulkJob:
+        """Atomic conditional status transition (audit finding #26).
+
+        The UPDATE only applies when the current status is in *allowed*,
+        so concurrent pause/cancel requests cannot both pass a Python-side
+        check, and a worker's final commit cannot clobber CANCELLED.
+        """
+        result = await db.execute(
+            update(BulkJob)
+            .where(
+                BulkJob.id == job_id,
+                BulkJob.workspace_id == workspace_id,
+                BulkJob.status.in_(allowed),
+            )
+            .values(status=new_status, updated_at=datetime.now(UTC))
+            .returning(BulkJob.id)
+        )
+        claimed = result.first()
+        await db.commit()
+        job = await self.get_job(db, job_id, workspace_id)
+        if claimed is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot transition job in '{job.status.value}' status "
+                    f"to '{new_status.value}'"
+                ),
+            )
         return job
 
     async def pause(
@@ -184,17 +232,9 @@ class BulkJobService:
         workspace_id: uuid.UUID,
     ) -> BulkJob:
         """Pause a running job."""
-        job = await self.get_job(db, job_id, workspace_id)
-        if job.status != BulkJobStatus.RUNNING:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot pause job in '{job.status.value}' status",
-            )
-        job.status = BulkJobStatus.PAUSED
-        job.updated_at = datetime.now(UTC)
-        await db.commit()
-        await db.refresh(job)
-        return job
+        return await self._transition_status(
+            db, job_id, workspace_id, BulkJobStatus.PAUSED, (BulkJobStatus.RUNNING,)
+        )
 
     async def resume(
         self,
@@ -203,17 +243,9 @@ class BulkJobService:
         workspace_id: uuid.UUID,
     ) -> BulkJob:
         """Resume a paused job."""
-        job = await self.get_job(db, job_id, workspace_id)
-        if job.status != BulkJobStatus.PAUSED:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot resume job in '{job.status.value}' status",
-            )
-        job.status = BulkJobStatus.RUNNING
-        job.updated_at = datetime.now(UTC)
-        await db.commit()
-        await db.refresh(job)
-        return job
+        return await self._transition_status(
+            db, job_id, workspace_id, BulkJobStatus.RUNNING, (BulkJobStatus.PAUSED,)
+        )
 
     async def cancel(
         self,
@@ -222,21 +254,13 @@ class BulkJobService:
         workspace_id: uuid.UUID,
     ) -> BulkJob:
         """Cancel a job (allowed from PENDING, RUNNING, or PAUSED)."""
-        job = await self.get_job(db, job_id, workspace_id)
-        if job.status not in (
-            BulkJobStatus.PENDING,
-            BulkJobStatus.RUNNING,
-            BulkJobStatus.PAUSED,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot cancel job in '{job.status.value}' status",
-            )
-        job.status = BulkJobStatus.CANCELLED
-        job.updated_at = datetime.now(UTC)
-        await db.commit()
-        await db.refresh(job)
-        return job
+        return await self._transition_status(
+            db,
+            job_id,
+            workspace_id,
+            BulkJobStatus.CANCELLED,
+            (BulkJobStatus.PENDING, BulkJobStatus.RUNNING, BulkJobStatus.PAUSED),
+        )
 
     @staticmethod
     def extract_config(job: BulkJob) -> dict[str, Any]:

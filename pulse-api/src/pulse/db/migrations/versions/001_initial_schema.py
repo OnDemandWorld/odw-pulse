@@ -906,6 +906,20 @@ def upgrade() -> None:
         count=52,
     )
 
+    # DEFAULT partitions as a safety net (audit finding #24): rows outside
+    # the fixed windows (backdated, or beyond the last pre-created partition)
+    # land here instead of failing the INSERT. A scheduled maintenance job
+    # should still create future windows ahead of time and drain DEFAULTs.
+    for _tbl in (
+        "audit_logs",
+        "experiment_assignments",
+        "experiment_exposures",
+        "performance_events",
+    ):
+        op.execute(
+            f"CREATE TABLE IF NOT EXISTS {_tbl}_default PARTITION OF {_tbl} DEFAULT"
+        )
+
     # ------------------------------------------------------------------
     # 6. Row-Level Security
     # ------------------------------------------------------------------
@@ -939,6 +953,10 @@ def upgrade() -> None:
         "experiment_assignments",
         "experiment_exposures",
         "prompt_versions",
+        # Audit finding #23: telemetry was previously unprotected. Rows carry
+        # their own workspace_id (set at ingestion); NULL-workspace legacy
+        # rows are deny-by-default under the direct policy.
+        "performance_events",
     ]
 
     for tbl in workspace_scoped_tables:
@@ -976,6 +994,7 @@ def upgrade() -> None:
         _direct_policy("webhook_configs"),
         _direct_policy("experiments"),
         _direct_policy("prompt_versions"),
+        _direct_policy("performance_events"),
         # Child tables scoped via their parent.
         _parent_policy("content_versions", "content_pieces", "content_piece_id"),
         _parent_policy("review_annotations", "content_pieces", "content_piece_id"),
@@ -1012,6 +1031,7 @@ def downgrade() -> None:
         "experiment_assignments_workspace_isolation",
         "experiment_exposures_workspace_isolation",
         "prompt_versions_workspace_isolation",
+        "performance_events_workspace_isolation",
     ]
     for tbl, pol in zip(
         [
@@ -1047,6 +1067,13 @@ def downgrade() -> None:
     )
     _drop_weekly_partitions(op, "experiment_exposures", count=52, prefix="experiment_exposures")
     _drop_weekly_partitions(op, "performance_events", count=52, prefix="performance_events")
+    for _tbl in (
+        "audit_logs",
+        "experiment_assignments",
+        "experiment_exposures",
+        "performance_events",
+    ):
+        op.execute(f"DROP TABLE IF EXISTS {_tbl}_default")
 
     # 3. Drop tables in reverse dependency order.
     tables_in_drop_order = [

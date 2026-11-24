@@ -120,6 +120,18 @@ def get_admin_session_factory(
     global _admin_engine, _admin_session_factory  # noqa: PLW0603
     if _admin_session_factory is None:
         s = settings or get_settings()
+        # Audit finding #25: once RLS is enforced, pre-auth queries (login,
+        # registration) run without workspace context and are denied by the
+        # users policy unless they use a dedicated BYPASSRLS role. FORCE RLS
+        # binds the table owner too, so falling back to DATABASE_URL (or
+        # pointing the admin URL at the owner) silently breaks auth.
+        if s.rls_enforced and (
+            not s.database_admin_url or s.database_admin_url == s.database_url
+        ):
+            raise RuntimeError(
+                "PULSE_RLS_ENFORCED is set but DATABASE_ADMIN_URL is unset or equals "
+                "DATABASE_URL. Provide a dedicated BYPASSRLS admin role URL."
+            )
         admin_url = s.database_admin_url or s.database_url
         _admin_engine = create_async_engine(
             admin_url,

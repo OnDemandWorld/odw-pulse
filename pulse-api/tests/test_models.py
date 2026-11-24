@@ -361,3 +361,34 @@ def test_migration_enum_and_jsonb_match_models() -> None:
     enum_block = text.split("bulk_job_status = sa.Enum(")[1].split(")")[0]
     assert '"paused"' in enum_block
     assert "sa.JSON" not in text, "migration must use postgresql.JSONB to match ORM models"
+
+
+def test_admin_factory_requires_distinct_url_when_rls_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit #25: fail fast instead of silently breaking auth after RLS rollout."""
+    import pulse.db.session as session_mod
+    from pulse.config import Settings
+
+    monkeypatch.setattr(session_mod, "_admin_session_factory", None)
+    monkeypatch.setattr(session_mod, "_admin_engine", None)
+    settings = Settings(
+        rls_enforced=True,
+        database_admin_url=None,
+        database_url="postgresql+asyncpg://pulse:pulse@localhost/pulse",
+    )
+    with pytest.raises(RuntimeError, match="BYPASSRLS"):
+        session_mod.get_admin_session_factory(settings)
+
+
+def test_migration_rls_and_default_partitions_cover_telemetry() -> None:
+    """Drift guard (audit #23/#24)."""
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[1] / "src/pulse/db/migrations/versions"
+    text001 = (versions / "001_initial_schema.py").read_text()
+    rls_list = text001.split("workspace_scoped_tables = [")[1].split("]")[0]
+    assert '"performance_events"' in rls_list
+    assert "_default PARTITION OF" in text001
+    text002 = (versions / "002_user_auth.py").read_text()
+    assert '"performance_events"' in text002

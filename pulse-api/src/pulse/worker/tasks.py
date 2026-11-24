@@ -13,14 +13,16 @@ import csv
 import logging
 import tempfile
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from pulse.api.schemas.bulk_job import BulkJobConfig
 from pulse.generation.models import GenerationRequest
-from pulse.models.bulk_job import BulkJobStatus
+from pulse.models.bulk_job import BulkJob, BulkJobStatus
 from pulse.services.bulk_job_service import BulkJobService
 
 logger = logging.getLogger(__name__)
@@ -175,9 +177,22 @@ async def process_bulk_job(
             else BulkJobStatus.FAILED
         )
 
-        job.status = final_status
-        job.output_file = str(output_path)
-        job.errors = errors or None
+        # Conditional final write (audit findings #26/#42): only apply the
+        # terminal status while the job is still RUNNING/PAUSED, so a cancel
+        # or reaper failure committed meanwhile is never overwritten.
+        await db.execute(
+            update(BulkJob)
+            .where(
+                BulkJob.id == jid,
+                BulkJob.status.in_((BulkJobStatus.RUNNING, BulkJobStatus.PAUSED)),
+            )
+            .values(
+                status=final_status,
+                output_file=str(output_path),
+                errors=errors or None,
+                updated_at=datetime.now(UTC),
+            )
+        )
         await db.commit()
 
         logger.info(
